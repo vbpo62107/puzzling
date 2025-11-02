@@ -9,6 +9,7 @@ from typing import Any, Callable, Dict, Optional
 from telegram import Update
 from telegram.ext import ContextTypes
 
+from monitoring import log_activity
 USER_STORE_PATH = Path(os.getenv("USER_STORE_PATH", "data/users.json")).expanduser()
 USER_STORE_PATH.parent.mkdir(parents=True, exist_ok=True)
 
@@ -95,13 +96,17 @@ def require_role(required_role: str) -> Callable:
         async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
             user_id = update.effective_user.id if update.effective_user else None
             chat_id = update.effective_chat.id if update.effective_chat else None
-            if not has_permission(user_id, required_role):
+            current_role = get_user_role(user_id)
+            command_name = func.__name__
+            if ROLES_ORDER.get(current_role, 0) < ROLES_ORDER.get(required_role, 0):
+                log_activity(user_id or 0, current_role, command_name, "deny")
                 message = "❌ 权限不足，无法执行该操作。"
                 if update.message:
                     await update.message.reply_text(message)
                 elif chat_id is not None:
                     await context.bot.send_message(chat_id=chat_id, text=message)
                 return
+            log_activity(user_id or 0, current_role, command_name, "pass")
             return await func(update, context, *args, **kwargs)
 
         return wrapper
