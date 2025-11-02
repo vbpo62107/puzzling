@@ -11,6 +11,7 @@ from handlers.file_handler import handle_file_message
 from handlers.status_handler import (
     cancel,
     help as help_command,
+    my_status,
     ping,
     start,
     status,
@@ -34,6 +35,7 @@ def build_application():
     application.add_handler(CommandHandler("auth", auth))
     application.add_handler(CommandHandler("revoke", revoke_tok))
     application.add_handler(CommandHandler("update", updates))
+    application.add_handler(CommandHandler("mystatus", my_status))
     application.add_handler(CommandHandler("status", status))
     application.add_handler(CommandHandler("cancel", cancel))
     application.add_handler(CommandHandler("ping", ping))

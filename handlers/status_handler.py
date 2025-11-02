@@ -6,7 +6,7 @@ from telegram.ext import ContextTypes
 
 from handlers.upload_handler import get_user_status, request_cancel
 from monitoring import get_today_stats
-from permissions import has_permission
+from permissions import require_role
 from plugins import TEXT
 
 
@@ -62,22 +62,54 @@ async def updates(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
 
 
+@require_role("admin")
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id if update.effective_chat else None
     user_id = update.effective_user.id if update.effective_user else chat_id
     task = get_user_status(user_id)
 
+    sections = []
+
+    if task is not None:
+        filename = task.get("filename") or "未命名文件"
+        stage = task.get("stage") or "处理中"
+        progress = int(task.get("progress", 0))
+        progress_bar = _render_progress_bar(progress)
+        updated_text = _format_elapsed(task.get("updated_at"))
+
+        lines = [
+            "📊 当前上传任务状态：",
+            f"• 文件：{filename}",
+            f"• 状态：{stage}",
+            f"• 进度：{progress_bar} {progress}%",
+        ]
+        if updated_text:
+            lines.append(f"• 最近更新：{updated_text}")
+        sections.append("\n".join(lines))
+
+    stats = get_today_stats()
+    sections.append(
+        "📊 今日运行统计：\n"
+        f"• 日期：{stats['date']}\n"
+        f"• 上传次数：{stats['upload_count']}\n"
+        f"• 总上传量：{stats['total_size_mb']} MB"
+    )
+
+    message = "\n\n".join(sections)
+
+    if update.message:
+        await update.message.reply_text(message)
+    elif chat_id is not None:
+        await context.bot.send_message(chat_id=chat_id, text=message)
+
+
+async def my_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat_id = update.effective_chat.id if update.effective_chat else None
+    user_id = update.effective_user.id if update.effective_user else chat_id
+    task = get_user_status(user_id)
+
     if task is None:
-        if has_permission(user_id, "admin"):
-            stats = get_today_stats()
-            message = (
-                "📊 今日运行统计：\n"
-                f"• 日期：{stats['date']}\n"
-                f"• 上传次数：{stats['upload_count']}\n"
-                f"• 总上传量：{stats['total_size_mb']} MB"
-            )
-        else:
-            message = "ℹ️ 当前没有进行中的上传任务。"
+        message = "ℹ️ 当前没有进行中的上传任务。"
     else:
         filename = task.get("filename") or "未命名文件"
         stage = task.get("stage") or "处理中"
