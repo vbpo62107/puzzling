@@ -117,6 +117,12 @@ async def upload(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         logging.warning(
             "⚠️ 用户 ID %s 缺少有效授权，corrupt=%s。", user_id, token_corrupt
         )
+        log_activity(
+            user_id or 0,
+            user_role,
+            "auth_missing",
+            f"corrupt={token_corrupt}",
+        )
         if token_corrupt:
             prompt_text = (
                 f"❌ 用户 ID {user_id} 的授权凭证已失效并被清理，请发送 /auth 重新授权。"
