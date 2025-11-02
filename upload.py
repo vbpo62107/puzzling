@@ -8,15 +8,12 @@ from googleapiclient.errors import HttpError
 from pydrive2.auth import GoogleAuth
 from pydrive2.drive import GoogleDrive
 
-from creds import GOOGLE_DRIVE_FOLDER_ID, GOOGLE_TOKEN_FILE
+from creds import GOOGLE_DRIVE_FOLDER_ID
 from google_utils import configure_gauth, ensure_token_storage
 
 logger = logging.getLogger(__name__)
 
 FOLDER_MIME_TYPE = "application/vnd.google-apps.folder"
-TOKEN_FILE_PATH = GOOGLE_TOKEN_FILE
-
-
 def _resolve_destination_folder(
     drive: GoogleDrive,
     default_folder_id: Optional[str],
@@ -81,17 +78,24 @@ def _resolve_destination_folder(
     return None, False
 
 
-def upload(filename: str, update, context, parent_folder: str = None) -> str:
-    gauth: GoogleAuth = configure_gauth(GoogleAuth())
-    ensure_token_storage()
-    gauth.LoadCredentialsFile(TOKEN_FILE_PATH)
+def upload(
+    filename: str,
+    update,
+    context,
+    parent_folder: str = None,
+    *,
+    token_file_path: str,
+) -> str:
+    gauth: GoogleAuth = configure_gauth(GoogleAuth(), token_file_path)
+    ensure_token_storage(token_file_path)
+    gauth.LoadCredentialsFile(token_file_path)
 
     if gauth.credentials is None:
         logger.warning("⚠️ 尚未完成授权流程。")
     elif gauth.access_token_expired:
         gauth.Refresh()
-        ensure_token_storage()
-        gauth.SaveCredentialsFile(TOKEN_FILE_PATH)
+        ensure_token_storage(token_file_path)
+        gauth.SaveCredentialsFile(token_file_path)
     else:
         gauth.Authorize()
 

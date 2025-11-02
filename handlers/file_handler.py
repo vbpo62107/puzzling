@@ -9,7 +9,7 @@ from telegram import Update
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
-from creds import CACHE_DIRECTORY, ENABLE_FORWARD_INFO, GOOGLE_TOKEN_FILE
+from creds import CACHE_DIRECTORY, ENABLE_FORWARD_INFO, get_user_token_path
 from exceptions import UploadError
 from handlers.upload_handler import (
     UPLOAD_FAIL_PROMPT,
@@ -89,7 +89,9 @@ async def handle_file_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     user_id = update.effective_user.id if update.effective_user else chat_id
     user_role = get_user_role(user_id)
 
-    if not os.path.exists(GOOGLE_TOKEN_FILE):
+    token_file_path = str(get_user_token_path(user_id))
+
+    if not os.path.exists(token_file_path):
         await context.bot.send_message(chat_id=chat_id, text=TEXT.NOT_AUTH)
         return
 
@@ -150,7 +152,12 @@ async def handle_file_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
 
         file_link = await asyncio.to_thread(
-            upload_to_drive, str(local_path), update, context, TEXT.drive_folder_name
+            upload_to_drive,
+            str(local_path),
+            update,
+            context,
+            TEXT.drive_folder_name,
+            token_file_path=token_file_path,
         )
 
         _raise_if_cancelled(user_id)

@@ -8,7 +8,7 @@ from telegram import Update
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
-from creds import GOOGLE_TOKEN_FILE
+from creds import get_user_token_path
 from exceptions import UploadError
 from message_utils import (
     format_download,
@@ -23,8 +23,6 @@ from plugins.wdl import wget_dl
 from pySmartDL import SmartDL
 from upload import upload as upload_to_drive
 from mega import Mega
-
-TOKEN_FILE_PATH = GOOGLE_TOKEN_FILE
 UPLOAD_FAIL_PROMPT = format_error("上传失败，请检查授权或网络。")
 
 UploadTask = Dict[str, Any]
@@ -114,7 +112,9 @@ async def upload(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id if update.effective_user else update.message.chat_id
     user_role = get_user_role(user_id)
 
-    if not os.path.exists(TOKEN_FILE_PATH):
+    token_file_path = str(get_user_token_path(user_id))
+
+    if not os.path.exists(token_file_path):
         await context.bot.send_message(
             chat_id=update.message.chat_id,
             text=TEXT.NOT_AUTH,
@@ -136,7 +136,15 @@ async def upload(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     try:
         _ensure_not_cancelled(user_id)
-        await _process_upload(url, update, context, sent_message, user_id, user_role)
+        await _process_upload(
+            url,
+            update,
+            context,
+            sent_message,
+            user_id,
+            user_role,
+            token_file_path,
+        )
     except UploadError as error:
         if is_cancelled(user_id):
             logging.info("🛑 用户ID %s 手动中断上传：%s", user_id, error)
@@ -161,6 +169,7 @@ async def _process_upload(
     sent_message,
     user_id: int,
     user_role: str,
+    token_file_path: str,
 ) -> None:
     filename: Optional[str] = None
     display_name: Optional[str] = None
@@ -282,6 +291,7 @@ async def _process_upload(
                 update,
                 context,
                 TEXT.drive_folder_name,
+                token_file_path=token_file_path,
             )
         except Exception as error:
             _update_status(user_id, stage="上传至 Google Drive 失败", progress=90, filename=file_display_name)
