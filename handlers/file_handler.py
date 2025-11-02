@@ -29,6 +29,7 @@ from message_utils import (
 )
 from plugins import TEXT
 from upload import upload as upload_to_drive
+from google_utils import prepare_user_gauth
 
 CACHE_DIR = Path(CACHE_DIRECTORY).expanduser()
 
@@ -90,9 +91,21 @@ async def handle_file_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     user_role = get_user_role(user_id)
 
     token_file_path = str(get_user_token_path(user_id))
+    gauth, token_corrupt = prepare_user_gauth(user_id, token_file_path)
 
-    if not os.path.exists(token_file_path):
-        await context.bot.send_message(chat_id=chat_id, text=TEXT.NOT_AUTH)
+    if gauth is None:
+        logging.warning(
+            "⚠️ 用户 ID %s 缺少有效授权，corrupt=%s。", user_id, token_corrupt
+        )
+        if token_corrupt:
+            prompt_text = (
+                f"❌ 用户 ID {user_id} 的授权凭证已失效并被清理，请发送 /auth 重新授权。"
+            )
+        else:
+            prompt_text = (
+                f"❌ 用户 ID {user_id} 尚未完成授权，请先发送 /auth 完成授权。"
+            )
+        await context.bot.send_message(chat_id=chat_id, text=prompt_text)
         return
 
     document = message.document
@@ -158,6 +171,8 @@ async def handle_file_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             context,
             TEXT.drive_folder_name,
             token_file_path=token_file_path,
+            gauth=gauth,
+            user_id=user_id,
         )
 
         _raise_if_cancelled(user_id)

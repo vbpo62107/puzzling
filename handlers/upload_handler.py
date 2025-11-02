@@ -10,11 +10,7 @@ from telegram.ext import ContextTypes
 
 from creds import get_user_token_path
 from exceptions import UploadError
-from message_utils import (
-    format_download,
-    format_error,
-    format_progress,
-)
+from message_utils import format_download, format_error, format_progress
 from monitoring import log_activity, record_upload
 from permissions import get_user_role
 from plugins import TEXT
@@ -23,6 +19,8 @@ from plugins.wdl import wget_dl
 from pySmartDL import SmartDL
 from upload import upload as upload_to_drive
 from mega import Mega
+from google_utils import prepare_user_gauth
+from pydrive2.auth import GoogleAuth
 UPLOAD_FAIL_PROMPT = format_error("上传失败，请检查授权或网络。")
 
 UploadTask = Dict[str, Any]
@@ -113,11 +111,23 @@ async def upload(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_role = get_user_role(user_id)
 
     token_file_path = str(get_user_token_path(user_id))
+    gauth, token_corrupt = prepare_user_gauth(user_id, token_file_path)
 
-    if not os.path.exists(token_file_path):
+    if gauth is None:
+        logging.warning(
+            "⚠️ 用户 ID %s 缺少有效授权，corrupt=%s。", user_id, token_corrupt
+        )
+        if token_corrupt:
+            prompt_text = (
+                f"❌ 用户 ID {user_id} 的授权凭证已失效并被清理，请发送 /auth 重新授权。"
+            )
+        else:
+            prompt_text = (
+                f"❌ 用户 ID {user_id} 尚未完成授权，请先发送 /auth 完成授权。"
+            )
         await context.bot.send_message(
             chat_id=update.message.chat_id,
-            text=TEXT.NOT_AUTH,
+            text=prompt_text,
         )
         return
 
@@ -144,6 +154,7 @@ async def upload(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             user_id,
             user_role,
             token_file_path,
+            gauth,
         )
     except UploadError as error:
         if is_cancelled(user_id):
@@ -170,6 +181,7 @@ async def _process_upload(
     user_id: int,
     user_role: str,
     token_file_path: str,
+    gauth: GoogleAuth,
 ) -> None:
     filename: Optional[str] = None
     display_name: Optional[str] = None
@@ -292,7 +304,14 @@ async def _process_upload(
                 context,
                 TEXT.drive_folder_name,
                 token_file_path=token_file_path,
+                gauth=gauth,
+                user_id=user_id,
             )
+        except UploadError:
+            _update_status(
+                user_id, stage="上传至 Google Drive 失败", progress=90, filename=file_display_name
+            )
+            raise
         except Exception as error:
             _update_status(user_id, stage="上传至 Google Drive 失败", progress=90, filename=file_display_name)
             raise UploadError("Google Drive 上传阶段出现错误。") from error

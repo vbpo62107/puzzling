@@ -2,6 +2,7 @@
 import logging
 import os
 import os.path as path
+from pathlib import Path
 from typing import Optional, Tuple
 
 from googleapiclient.errors import HttpError
@@ -10,6 +11,7 @@ from pydrive2.drive import GoogleDrive
 
 from creds import GOOGLE_DRIVE_FOLDER_ID
 from google_utils import configure_gauth, ensure_token_storage
+from exceptions import UploadError
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +80,18 @@ def _resolve_destination_folder(
     return None, False
 
 
+def _purge_token_file(token_file_path: str) -> None:
+    token_path = Path(token_file_path).expanduser()
+    if token_path.exists():
+        try:
+            token_path.unlink()
+            logger.info("🧹 已删除损坏的凭证文件：%s", token_path)
+        except Exception as cleanup_error:  # pragma: no cover - defensive logging
+            logger.warning(
+                "⚠️ 删除损坏的凭证文件失败：%s", cleanup_error, exc_info=True
+            )
+
+
 def upload(
     filename: str,
     update,
@@ -85,19 +99,76 @@ def upload(
     parent_folder: str = None,
     *,
     token_file_path: str,
+    gauth: Optional[GoogleAuth] = None,
+    user_id: Optional[int] = None,
 ) -> str:
-    gauth: GoogleAuth = configure_gauth(GoogleAuth(), token_file_path)
+    logger.info(
+        "☁️ 即将为用户 %s 上传文件：%s",
+        user_id if user_id is not None else "未知",
+        filename,
+    )
+
     ensure_token_storage(token_file_path)
-    gauth.LoadCredentialsFile(token_file_path)
+    gauth = configure_gauth(gauth or GoogleAuth(), token_file_path)
+
+    if getattr(gauth, "credentials", None) is None:
+        try:
+            gauth.LoadCredentialsFile(token_file_path)
+        except Exception as load_error:
+            logger.error(
+                "❌ 无法加载用户 %s 的授权凭证：%s",
+                user_id,
+                load_error,
+                exc_info=True,
+            )
+            _purge_token_file(token_file_path)
+            raise UploadError(
+                f"用户 {user_id or '未知'} 的授权凭证缺失或已损坏，请发送 /auth 重新授权。"
+            ) from load_error
 
     if gauth.credentials is None:
-        logger.warning("⚠️ 尚未完成授权流程。")
-    elif gauth.access_token_expired:
-        gauth.Refresh()
-        ensure_token_storage(token_file_path)
-        gauth.SaveCredentialsFile(token_file_path)
-    else:
+        raise UploadError(
+            f"用户 {user_id or '未知'} 尚未授权，请发送 /auth 完成授权。"
+        )
+
+    if getattr(gauth.credentials, "invalid", False):
+        logger.warning("⚠️ 用户 %s 的凭证标记为无效。", user_id)
+        _purge_token_file(token_file_path)
+        raise UploadError(
+            f"用户 {user_id or '未知'} 的授权已失效，请发送 /auth 重新授权。"
+        )
+
+    if gauth.access_token_expired:
+        try:
+            gauth.Refresh()
+            ensure_token_storage(token_file_path)
+            gauth.SaveCredentialsFile(token_file_path)
+            logger.info("🔄 已刷新用户 %s 的访问令牌。", user_id)
+        except Exception as refresh_error:
+            logger.error(
+                "❌ 刷新用户 %s 的授权凭证失败：%s",
+                user_id,
+                refresh_error,
+                exc_info=True,
+            )
+            _purge_token_file(token_file_path)
+            raise UploadError(
+                f"用户 {user_id or '未知'} 的授权凭证无法刷新，请重新发送 /auth。"
+            ) from refresh_error
+
+    try:
         gauth.Authorize()
+    except Exception as authorize_error:
+        logger.error(
+            "❌ 授权用户 %s 的凭证失败：%s",
+            user_id,
+            authorize_error,
+            exc_info=True,
+        )
+        _purge_token_file(token_file_path)
+        raise UploadError(
+            f"用户 {user_id or '未知'} 的授权验证失败，请重新执行 /auth。"
+        ) from authorize_error
 
     drive = GoogleDrive(gauth)
     http = drive.auth.Get_Http_Object()
