@@ -6,6 +6,7 @@ import sys
 import tempfile
 import time
 import unittest
+from datetime import datetime
 from pathlib import Path
 
 
@@ -56,6 +57,8 @@ class TokenCleanupTests(unittest.TestCase):
         self.assertTrue(healthy.exists())
         for issue in report.deleted_files:
             self.assertIn(issue.reason, {"empty file", "invalid JSON"})
+            self.assertIsInstance(issue.deleted_at, datetime)
+            self.assertIsNotNone(issue.deleted_at.tzinfo)
 
     def test_full_scan_checks_age_and_naming(self) -> None:
         os.environ["TOKEN_MAX_AGE_DAYS"] = "1"
@@ -82,6 +85,16 @@ class TokenCleanupTests(unittest.TestCase):
         self.assertIn("token expired", deleted[expired])
         self.assertTrue(healthy.exists())
         self.assertEqual(report.kept_files, 1)
+        for issue in report.deleted_files:
+            self.assertIsInstance(issue.deleted_at, datetime)
+            self.assertIsNotNone(issue.deleted_at.tzinfo)
+
+    def test_run_cleanup_switches_modes(self) -> None:
+        quick_report = self.token_cleanup.run_cleanup(full=False)
+        full_report = self.token_cleanup.run_cleanup(full=True)
+
+        self.assertEqual(quick_report.mode, "quick")
+        self.assertEqual(full_report.mode, "full")
 
 
 if __name__ == "__main__":
