@@ -84,6 +84,12 @@ def log_system_info(message: str) -> None:
     logging.getLogger("system").info("%s", message)
 
 
+def trigger_admin_alert(message: str) -> None:
+    """Raise an operational alert for administrators via the system logger."""
+
+    logging.getLogger("system").warning("[ADMIN ALERT] %s", message)
+
+
 @dataclass
 class DailyStats:
     day: date

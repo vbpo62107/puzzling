@@ -19,7 +19,8 @@ from handlers.status_handler import (
 )
 from handlers.upload_handler import upload
 from handlers.admin_handler import add_user, list_users_command, remove_user_command, show_logs
-from monitoring import log_system_info, setup_logging
+from monitoring import log_system_info, setup_logging, trigger_admin_alert
+from token_cleanup import scan_tokens
 
 LOG_LEVEL_NAME = os.getenv("LOG_LEVEL", "INFO").upper()
 setup_logging(LOG_LEVEL_NAME)
@@ -59,6 +60,28 @@ def build_application():
 
 
 def main() -> None:
+    cleanup_report = scan_tokens(mode="quick")
+    cleanup_summary = cleanup_report.summary()
+    logging.info(cleanup_summary)
+    log_system_info(cleanup_summary)
+
+    threshold_raw = os.getenv("TOKEN_CLEANUP_ALERT_THRESHOLD")
+    try:
+        alert_threshold = int(threshold_raw) if threshold_raw is not None else 5
+    except ValueError:
+        logging.warning(
+            "Invalid TOKEN_CLEANUP_ALERT_THRESHOLD value %r; defaulting to 5", threshold_raw
+        )
+        alert_threshold = 5
+
+    alert_threshold = max(0, alert_threshold)
+    if alert_threshold and cleanup_report.deleted_count >= alert_threshold:
+        alert_message = (
+            f"Token cleanup removed {cleanup_report.deleted_count} files during startup "
+            f"(mode={cleanup_report.mode})."
+        )
+        trigger_admin_alert(alert_message)
+
     application = build_application()
     logging.info("🤖 机器人已成功启动。")
     log_system_info("机器人已成功启动。")
