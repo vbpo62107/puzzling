@@ -117,10 +117,67 @@ async def search_logs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 lines.append("… 结果已截断，使用 --limit 调整显示数量。")
             message = "\n".join(lines)
 
+    await _send_large_text(update, context, message)
+
+
+async def _send_large_text(
+    update: Update, context: ContextTypes.DEFAULT_TYPE, message: str, *, limit: int = 3800
+) -> None:
+    if not message:
+        return
+
+    chat = update.effective_chat
+    if not chat:
+        return
+
+    chunks = _split_message_chunks(message, limit)
     if update.message:
-        await update.message.reply_text(message)
-    elif update.effective_chat:
-        await context.bot.send_message(update.effective_chat.id, message)
+        await update.message.reply_text(chunks[0])
+        for chunk in chunks[1:]:
+            await context.bot.send_message(chat.id, chunk)
+    else:
+        for chunk in chunks:
+            await context.bot.send_message(chat.id, chunk)
+
+
+def _split_message_chunks(text: str, limit: int) -> list[str]:
+    if len(text) <= limit:
+        return [text]
+
+    lines = text.splitlines()
+    chunks: list[str] = []
+    current_lines: list[str] = []
+    current_length = 0
+
+    def flush_current() -> None:
+        nonlocal current_lines, current_length
+        if current_lines:
+            chunks.append("\n".join(current_lines))
+            current_lines = []
+            current_length = 0
+
+    for line in lines:
+        line_length = len(line)
+        additional = line_length if not current_lines else line_length + 1
+        if additional > limit:
+            # Flush current lines before splitting the long line.
+            flush_current()
+            start = 0
+            while start < line_length:
+                end = min(start + limit, line_length)
+                chunks.append(line[start:end])
+                start = end
+            continue
+
+        if current_length + additional > limit:
+            flush_current()
+
+        current_lines.append(line)
+        current_length = current_length + additional
+
+    flush_current()
+
+    return chunks or [""]
 
 
 @require_role("super_admin")
