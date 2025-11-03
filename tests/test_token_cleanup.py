@@ -84,6 +84,23 @@ class TokenCleanupTests(unittest.TestCase):
         self.assertTrue(healthy.exists())
         self.assertEqual(report.kept_files, 1)
 
+    def test_full_scan_handles_non_dict_json(self) -> None:
+        array_token = self._create_token("token_array.json")
+        array_token.write_text("[1, 2, 3]", encoding="utf-8")
+
+        string_token = self._create_token("token_string.json")
+        string_token.write_text('"hello"', encoding="utf-8")
+
+        report = self.token_cleanup.scan_tokens(mode="full")
+
+        self.assertEqual(report.total_files, 2)
+        self.assertEqual(report.deleted_count, 2)
+        reasons = {issue.path: issue.reason for issue in report.deleted_files}
+        self.assertIn(array_token, reasons)
+        self.assertIn("unexpected JSON structure", reasons[array_token])
+        self.assertIn(string_token, reasons)
+        self.assertIn("unexpected JSON structure", reasons[string_token])
+
 
 if __name__ == "__main__":
     unittest.main()
