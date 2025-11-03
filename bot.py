@@ -76,12 +76,13 @@ def main() -> None:
 
     threshold_raw = os.getenv("TOKEN_CLEANUP_ALERT_THRESHOLD")
     try:
-        alert_threshold = int(threshold_raw) if threshold_raw is not None else 5
+        alert_threshold = int(threshold_raw) if threshold_raw is not None else 10
     except ValueError:
         logging.warning(
-            "Invalid TOKEN_CLEANUP_ALERT_THRESHOLD value %r; defaulting to 5", threshold_raw
+            "Invalid TOKEN_CLEANUP_ALERT_THRESHOLD value %r; defaulting to 10",
+            threshold_raw,
         )
-        alert_threshold = 5
+        alert_threshold = 10
 
     alert_threshold = max(0, alert_threshold)
     if alert_threshold and cleanup_report.deleted_count >= alert_threshold:
