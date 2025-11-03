@@ -26,7 +26,14 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterable, List, Literal, Optional
 
-from creds import GOOGLE_TOKEN_BASE_DIR
+try:
+    from creds import get_google_token_base_dir
+except ImportError:  # pragma: no cover - fallback when creds is unavailable
+    def get_google_token_base_dir(default: str | Path = "user_data") -> Path:
+        return Path(default)
+
+
+GOOGLE_TOKEN_BASE_DIR = get_google_token_base_dir()
 
 logger = logging.getLogger(__name__)
 
