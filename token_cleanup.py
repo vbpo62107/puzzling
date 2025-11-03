@@ -24,7 +24,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Iterable, List, Literal, Optional
+from typing import Any, Iterable, List, Literal, Optional
 
 from creds import GOOGLE_TOKEN_BASE_DIR
 
@@ -78,7 +78,7 @@ def _iter_token_files(base_dir: Path) -> Iterable[Path]:
     )
 
 
-def _load_json(path: Path) -> tuple[Optional[dict], Optional[str]]:
+def _load_json(path: Path) -> tuple[Optional[object], Optional[str]]:
     try:
         with path.open("r", encoding="utf-8") as handle:
             return json.load(handle), None
@@ -100,7 +100,7 @@ def _parse_expiry(value: str) -> Optional[datetime]:
 
 def _full_mode_checks(
     path: Path,
-    data: Optional[dict],
+    data: Optional[dict[str, Any]],
     modified: datetime,
     now: datetime,
     max_age_days: Optional[int],
@@ -170,15 +170,19 @@ def scan_tokens(mode: ScanMode = "quick", base_dir: Optional[Path] = None) -> To
         report.total_files += 1
 
         reasons: List[str] = []
-        data: Optional[dict] = None
+        data: Optional[dict[str, Any]] = None
 
         if stats.st_size == 0:
             reasons.append("empty file")
         else:
-            data, json_error = _load_json(token_file)
+            parsed, json_error = _load_json(token_file)
             if json_error:
                 reasons.append(json_error)
-
+            elif not isinstance(parsed, dict):
+                reasons.append("unexpected JSON structure")
+            
+            else:
+                data = parsed
         if not reasons and mode == "full":
             modified = datetime.fromtimestamp(stats.st_mtime, tz=timezone.utc)
             reasons.extend(_full_mode_checks(token_file, data, modified, now, max_age_days))
