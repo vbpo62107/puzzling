@@ -95,9 +95,7 @@ class AuthLoggingTests(unittest.IsolatedAsyncioTestCase):
         ) as mock_log_activity:
             await self.file_handler.handle_file_message(update, context)
 
-        expected_prompt = (
-            f"❌ 用户 ID {user_id} 尚未完成授权，请先发送 /auth 完成授权。"
-        )
+        expected_prompt = "❌ 未能加载您的授权凭证，请重新发送 /auth 完成授权。"
         context.bot.send_message.assert_awaited_once_with(
             chat_id=user_id, text=expected_prompt
         )
@@ -106,7 +104,7 @@ class AuthLoggingTests(unittest.IsolatedAsyncioTestCase):
             "user",
             "auth_missing",
             source="handlers.file",
-            verification="token_missing",
+            verification="token_invalid",
             metadata={"corrupt": False},
         )
 

@@ -114,15 +114,16 @@ async def upload(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     gauth, token_corrupt = prepare_user_gauth(user_id, token_file_path)
 
     if gauth is None:
+        reason = "token_corrupt" if token_corrupt else "token_invalid"
         logging.warning(
-            "⚠️ 用户 ID %s 缺少有效授权，corrupt=%s。", user_id, token_corrupt
+            "⚠️ 用户 ID %s 的授权凭证无效，corrupt=%s。", user_id, token_corrupt
         )
         log_activity(
             user_id or 0,
             user_role,
             "auth_missing",
             source="handlers.upload",
-            verification="token_corrupt" if token_corrupt else "token_missing",
+            verification=reason,
             metadata={"corrupt": token_corrupt},
         )
         if token_corrupt:
@@ -131,7 +132,7 @@ async def upload(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             )
         else:
             prompt_text = (
-                f"❌ 用户 ID {user_id} 尚未完成授权，请先发送 /auth 完成授权。"
+                f"❌ 未能加载您的授权凭证，请重新发送 /auth 完成授权。"
             )
         await context.bot.send_message(
             chat_id=update.message.chat_id,

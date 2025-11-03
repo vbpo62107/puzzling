@@ -12,6 +12,7 @@ from google_utils import configure_gauth, ensure_token_storage
 from plugins import TEXT
 from plugins.tok_rec import is_token
 from pydrive2.auth import GoogleAuth
+from security.manager import permission_manager
 
 AUTH_FAIL_PROMPT = "❌ 授权失败，请检查凭证或网络。"
 
@@ -172,6 +173,7 @@ async def token(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             gauth.SaveCredentialsFile(token_file_path)
         except Exception as save_error:
             raise AuthError("保存授权凭证失败。") from save_error
+        permission_manager.register_token(user_id)
 
         logging.info("✅ 用户 %s 的授权令牌保存成功。", user_id)
         await context.bot.send_message(
@@ -198,6 +200,7 @@ async def revoke_tok(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         token_file_path = str(get_user_token_path(user_id))
         if os.path.exists(token_file_path):
             os.remove(token_file_path)
+            permission_manager.unregister_token(user_id)
             logging.info("🔒 已撤销用户 %s 的本地凭证文件。", user_id)
             if update.effective_chat:
                 await context.bot.send_message(
