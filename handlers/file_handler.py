@@ -19,7 +19,7 @@ from handlers.upload_handler import (
     update_status,
 )
 from monitoring import log_activity, record_upload
-from permissions import get_user_role
+from permissions import get_user_role, mark_token_absent
 from message_utils import (
     format_download,
     format_error,
@@ -103,6 +103,7 @@ async def handle_file_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             "auth_missing",
             f"corrupt={token_corrupt}",
         )
+        mark_token_absent(user_id)
         if token_corrupt:
             prompt_text = (
                 f"❌ 用户 ID {user_id} 的授权凭证已失效并被清理，请发送 /auth 重新授权。"

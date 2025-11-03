@@ -27,6 +27,7 @@ from handlers.admin_handler import (
 )
 from monitoring import log_system_info, setup_logging, trigger_admin_alert
 from puzzling.token_cleanup import run_cleanup
+from security import security_interceptor
 
 LOG_LEVEL_NAME = os.getenv("LOG_LEVEL", "INFO").upper()
 setup_logging(LOG_LEVEL_NAME)
@@ -37,30 +38,40 @@ logging.info("🤖 机器人启动中…")
 def build_application():
     application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("auth", auth))
-    application.add_handler(CommandHandler("revoke", revoke_tok))
-    application.add_handler(CommandHandler("update", updates))
-    application.add_handler(CommandHandler("mystatus", my_status))
-    application.add_handler(CommandHandler("status", status))
-    application.add_handler(CommandHandler("cancel", cancel))
-    application.add_handler(CommandHandler("ping", ping))
-    application.add_handler(CommandHandler("logs", show_logs))
-    application.add_handler(CommandHandler("adduser", add_user))
-    application.add_handler(CommandHandler("removeuser", remove_user_command))
-    application.add_handler(CommandHandler("users", list_users_command))
-    application.add_handler(CommandHandler("cleanup", cleanup_tokens_command))
+    application.add_handler(CommandHandler("start", security_interceptor.wrap("start", start)))
+    application.add_handler(CommandHandler("help", security_interceptor.wrap("help", help_command)))
+    application.add_handler(CommandHandler("auth", security_interceptor.wrap("auth", auth)))
+    application.add_handler(CommandHandler("revoke", security_interceptor.wrap("revoke_tok", revoke_tok)))
+    application.add_handler(CommandHandler("update", security_interceptor.wrap("updates", updates)))
+    application.add_handler(CommandHandler("mystatus", security_interceptor.wrap("my_status", my_status)))
+    application.add_handler(CommandHandler("status", security_interceptor.wrap("status", status)))
+    application.add_handler(CommandHandler("cancel", security_interceptor.wrap("cancel", cancel)))
+    application.add_handler(CommandHandler("ping", security_interceptor.wrap("ping", ping)))
+    application.add_handler(CommandHandler("logs", security_interceptor.wrap("show_logs", show_logs)))
+    application.add_handler(CommandHandler("adduser", security_interceptor.wrap("add_user", add_user)))
+    application.add_handler(
+        CommandHandler("removeuser", security_interceptor.wrap("remove_user_command", remove_user_command))
+    )
+    application.add_handler(CommandHandler("users", security_interceptor.wrap("list_users_command", list_users_command)))
+    application.add_handler(CommandHandler("cleanup", security_interceptor.wrap("cleanup_tokens", cleanup_tokens_command)))
 
     application.add_handler(
         MessageHandler(
             (filters.Document.ALL | filters.PHOTO),
-            handle_file_message,
+            security_interceptor.wrap("handle_file_message", handle_file_message),
         )
     )
-    application.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"http"), upload))
     application.add_handler(
-        MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex(r"http"), token)
+        MessageHandler(
+            filters.TEXT & filters.Regex(r"http"),
+            security_interceptor.wrap("upload", upload),
+        )
+    )
+    application.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND & ~filters.Regex(r"http"),
+            security_interceptor.wrap("token", token),
+        )
     )
 
     return application

@@ -12,7 +12,7 @@ from creds import get_user_token_path
 from exceptions import UploadError
 from message_utils import format_download, format_error, format_progress
 from monitoring import log_activity, record_upload
-from permissions import get_user_role
+from permissions import get_user_role, mark_token_absent
 from plugins import TEXT
 from plugins.dpbox import DPBOX
 from plugins.wdl import wget_dl
@@ -123,6 +123,7 @@ async def upload(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "auth_missing",
             f"corrupt={token_corrupt}",
         )
+        mark_token_absent(user_id)
         if token_corrupt:
             prompt_text = (
                 f"❌ 用户 ID {user_id} 的授权凭证已失效并被清理，请发送 /auth 重新授权。"
