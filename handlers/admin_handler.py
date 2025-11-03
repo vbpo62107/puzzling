@@ -1,5 +1,6 @@
 import html
 import logging
+from datetime import datetime, timezone
 from typing import Set
 
 from telegram import Update
@@ -8,7 +9,9 @@ from telegram.ext import ContextTypes
 from monitoring import tail_logs
 from permissions import (
     DEFAULT_SUPER_ADMINS,
+    get_super_admin_whitelist,
     list_users,
+    reload_admin_whitelist,
     remove_user,
     require_role,
     set_user_role,
@@ -147,3 +150,25 @@ async def cleanup_tokens(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 await context.bot.send_message(chat_id=admin_id, text=dm_text)
             except Exception as exc:  # pragma: no cover - defensive
                 logging.warning("Failed to notify super admin %s: %s", admin_id, exc)
+
+
+@require_role("super_admin")
+async def reload_whitelist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    reloaded = reload_admin_whitelist(force=True, source="command")
+    whitelist = sorted(get_super_admin_whitelist())
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S %Z")
+    whitelist_text = ", ".join(str(uid) for uid in whitelist) if whitelist else "（空）"
+    status = "✅" if reloaded else "ℹ️"
+    lines = [
+        f"{status} 管理员白名单已重新加载。",
+        f"• 时间：{timestamp}",
+        f"• 当前白名单：{whitelist_text}",
+    ]
+    if not reloaded:
+        lines.append("• 提示：未检测到文件变更。")
+    message = "\n".join(lines)
+
+    if update.message:
+        await update.message.reply_text(message)
+    elif update.effective_chat:
+        await context.bot.send_message(update.effective_chat.id, message)
