@@ -121,7 +121,9 @@ async def upload(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             user_id or 0,
             user_role,
             "auth_missing",
-            f"corrupt={token_corrupt}",
+            source="handlers.upload",
+            verification="token_corrupt" if token_corrupt else "token_missing",
+            metadata={"corrupt": token_corrupt},
         )
         if token_corrupt:
             prompt_text = (
@@ -148,7 +150,13 @@ async def upload(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         text=format_progress("已收到下载任务，正在排队", 5, f"文件：{filename_hint}"),
         parse_mode=ParseMode.HTML,
     )
-    log_activity(user_id or 0, user_role, "receive_url", f"url={url}")
+    log_activity(
+        user_id or 0,
+        user_role,
+        "receive_url",
+        source="handlers.upload",
+        metadata={"url": url},
+    )
 
     try:
         _ensure_not_cancelled(user_id)
@@ -168,11 +176,23 @@ async def upload(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await sent_message.edit_text("🛑 上传任务已终止。")
         else:
             logging.error("❌ 上传失败：%s", error, exc_info=True)
-            log_activity(user_id or 0, user_role, "upload_failed", str(error))
+            log_activity(
+                user_id or 0,
+                user_role,
+                "upload_failed",
+                source="handlers.upload",
+                metadata={"error": str(error)},
+            )
             await sent_message.edit_text(UPLOAD_FAIL_PROMPT, parse_mode=ParseMode.HTML)
     except Exception as error:
         logging.exception("❌ 上传流程出现未捕获的异常：%s", error)
-        log_activity(user_id or 0, user_role, "upload_exception", str(error))
+        log_activity(
+            user_id or 0,
+            user_role,
+            "upload_exception",
+            source="handlers.upload",
+            metadata={"error": str(error)},
+        )
         await sent_message.edit_text(format_error("系统出现异常，请稍后再试。"), parse_mode=ParseMode.HTML)
     finally:
         clear_user_status(user_id)
@@ -334,7 +354,12 @@ async def _process_upload(
             user_id or 0,
             user_role,
             "upload_success",
-            f"file={file_display_name} size={size_mb}MB link={file_link}",
+            source="handlers.upload",
+            metadata={
+                "file": file_display_name,
+                "size_mb": size_mb,
+                "link": file_link,
+            },
         )
 
     finally:
