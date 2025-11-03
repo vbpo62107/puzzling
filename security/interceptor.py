@@ -94,7 +94,7 @@ class SecurityInterceptor:
             user_role = get_user_role(user_id)
             command_name = name
 
-            if not auth_status.whitelisted and not auth_status.has_token:
+            if not auth_status.whitelisted:
                 self._log_denial(user_id, user_role, command_name, "not_whitelisted", auth_status)
                 await self._notify(context, chat_id, _DENY_MESSAGES["whitelist"])
                 return

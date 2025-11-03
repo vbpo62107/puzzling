@@ -85,7 +85,7 @@ class PermissionManager:
     def _load_whitelist(self) -> Set[int]:
         raw = os.getenv("BOT_WHITELIST_IDS", "")
         entries = {item.strip() for item in raw.replace(";", ",").split(",") if item.strip()}
-        whitelist: Set[int] = set()
+        whitelist: Set[int] = set(DEFAULT_SUPER_ADMINS)
         for entry in entries:
             if entry.isdigit():
                 whitelist.add(int(entry))
@@ -134,7 +134,7 @@ class PermissionManager:
 
         whitelisted = user_id in self._whitelist
         has_token = self._token_exists(user_id)
-        allowed = whitelisted or has_token
+        allowed = whitelisted
 
         status = AuthorizationStatus(allowed=allowed, whitelisted=whitelisted, has_token=has_token)
         self._cache.set(user_id, status)
