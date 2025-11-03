@@ -23,6 +23,7 @@ from handlers.admin_handler import (
     cleanup_tokens as cleanup_tokens_command,
     list_users_command,
     remove_user_command,
+    search_logs,
     show_logs,
 )
 from monitoring import log_system_info, setup_logging, trigger_admin_alert
@@ -47,6 +48,7 @@ def build_application():
     application.add_handler(CommandHandler("cancel", cancel))
     application.add_handler(CommandHandler("ping", ping))
     application.add_handler(CommandHandler("logs", show_logs))
+    application.add_handler(CommandHandler("search_logs", search_logs))
     application.add_handler(CommandHandler("adduser", add_user))
     application.add_handler(CommandHandler("removeuser", remove_user_command))
     application.add_handler(CommandHandler("users", list_users_command))

@@ -1,12 +1,18 @@
 import html
 import logging
 from datetime import datetime, timezone
-from typing import Set
+from typing import Optional, Set
 
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from monitoring import tail_logs
+from monitoring import (
+    build_log_query_parser,
+    parse_field_filters,
+    query_structured_logs,
+    summarize_logs,
+    tail_logs,
+)
 from permissions import (
     DEFAULT_SUPER_ADMINS,
     get_super_admin_whitelist,
@@ -34,6 +40,87 @@ async def show_logs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(message, parse_mode="HTML")
     elif update.effective_chat:
         await context.bot.send_message(update.effective_chat.id, message, parse_mode="HTML")
+
+
+@require_role("admin")
+async def search_logs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    parser = build_log_query_parser(prog="/search_logs", add_help=False)
+    try:
+        args = parser.parse_args(context.args)
+    except SystemExit:
+        usage = (
+            "❌ 参数错误。示例：/search_logs --uid 123456 --cmd /start --since 2024-01-01 "
+            "--field status=ok --limit 20"
+        )
+        if update.message:
+            await update.message.reply_text(usage)
+        elif update.effective_chat:
+            await context.bot.send_message(update.effective_chat.id, usage)
+        return
+
+    extra_filters = parse_field_filters(args.field)
+    query_limit: Optional[int]
+    if args.summary:
+        query_limit = None
+    else:
+        query_limit = (args.limit + 1) if args.limit is not None else None
+
+    results = query_structured_logs(
+        log_type=args.log,
+        user_id=args.uid,
+        command=args.cmd,
+        since=args.since,
+        until=args.until,
+        extra_filters=extra_filters,
+        limit=query_limit,
+    )
+
+    if args.summary:
+        stats = summarize_logs(results)
+        count = stats["count"]
+        time_range = stats["time_range"]
+        start_ts = time_range[0] or "-"
+        end_ts = time_range[1] or "-"
+        top_users = stats["top_users"]
+        top_commands = stats["top_commands"]
+
+        lines = ["📊 日志统计（当前筛选）", f"• 匹配条目：{count}"]
+        lines.append(f"• 时间范围：{start_ts} ~ {end_ts}")
+        if top_users:
+            users_text = ", ".join(f"{uid}×{cnt}" for uid, cnt in top_users)
+            lines.append(f"• 用户 TOP3：{users_text}")
+        if top_commands:
+            cmd_text = ", ".join(f"{cmd}×{cnt}" for cmd, cnt in top_commands)
+            lines.append(f"• 指令 TOP5：{cmd_text}")
+        if not results:
+            lines.append("• 没有符合条件的日志记录。")
+        message = "\n".join(lines)
+    else:
+        if not results:
+            message = "🔍 未找到符合条件的日志记录。"
+        else:
+            import json
+
+            limit = args.limit if args.limit is not None else len(results)
+            display = results[:limit]
+            has_more = len(results) > len(display)
+            lines = [
+                f"🔍 已检索到 {len(display)} 条日志记录。",
+            ]
+            for entry in display:
+                ts = entry.get("timestamp") or entry.get("time") or "-"
+                uid = entry.get("user_id", "-")
+                cmd = entry.get("command") or entry.get("action") or "-"
+                summary = json.dumps(entry, ensure_ascii=False)
+                lines.append(f"• {ts} | uid={uid} | cmd={cmd}\n  {summary}")
+            if has_more:
+                lines.append("… 结果已截断，使用 --limit 调整显示数量。")
+            message = "\n".join(lines)
+
+    if update.message:
+        await update.message.reply_text(message)
+    elif update.effective_chat:
+        await context.bot.send_message(update.effective_chat.id, message)
 
 
 @require_role("super_admin")

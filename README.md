@@ -192,6 +192,21 @@ Requires sudo privileges. 运行脚本需要 `sudo` 权限。
 
 ---
 
+## Log Inspection / 日志查询
+
+Use the admin command `/search_logs` to filter structured JSONL logs directly in Telegram. 示例：`/search_logs --uid 123456 --cmd /upload --since 2024-01-01`。
+
+For offline analysis, a CLI helper is available:
+
+```bash
+python3 tools/search_logs.py --uid 123456 --cmd /upload --since 2024-01-01 --until 2024-01-07 --summary
+python3 tools/search_logs.py --field status=failed --limit 10
+```
+
+The tool loads `logs/<type>.jsonl` (default `activity.jsonl`) and supports `--field key=value` for arbitrary columns, plus `--summary` to show aggregated statistics with emoji markers.
+
+---
+
 ## Docker Deployment / Docker 化部署
 
 | EN | 中文 |
