@@ -1,7 +1,7 @@
 import html
 import logging
 from datetime import datetime, timezone
-from typing import Optional, Set
+from typing import List, Optional, Set
 
 from telegram import Update
 from telegram.ext import ContextTypes
@@ -26,6 +26,64 @@ from puzzling.token_cleanup import TokenIssue, run_cleanup
 
 ROLES = {"user", "admin", "super_admin"}
 
+_TELEGRAM_TEXT_LIMIT = 4096
+
+
+async def _reply_text(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    text: str,
+    parse_mode: Optional[str] = None,
+) -> None:
+    if not text:
+        return
+    if update.message:
+        await update.message.reply_text(text, parse_mode=parse_mode)
+    elif update.effective_chat:
+        await context.bot.send_message(update.effective_chat.id, text, parse_mode=parse_mode)
+
+
+def _split_long_text(text: str) -> List[str]:
+    return [text[i : i + _TELEGRAM_TEXT_LIMIT] for i in range(0, len(text), _TELEGRAM_TEXT_LIMIT)]
+
+
+async def _reply_lines(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    lines: List[str],
+    parse_mode: Optional[str] = None,
+) -> None:
+    if not lines:
+        return
+
+    buffer: List[str] = []
+
+    async def flush_buffer() -> None:
+        if not buffer:
+            return
+        text = "\n".join(buffer)
+        if len(text) <= _TELEGRAM_TEXT_LIMIT:
+            await _reply_text(update, context, text, parse_mode=parse_mode)
+        else:
+            for chunk in _split_long_text(text):
+                await _reply_text(update, context, chunk, parse_mode=parse_mode)
+        buffer.clear()
+
+    for line in lines:
+        candidate = buffer + [line]
+        candidate_text = "\n".join(candidate)
+        if len(candidate_text) > _TELEGRAM_TEXT_LIMIT:
+            await flush_buffer()
+            if len(line) > _TELEGRAM_TEXT_LIMIT:
+                for chunk in _split_long_text(line):
+                    await _reply_text(update, context, chunk, parse_mode=parse_mode)
+            else:
+                buffer.append(line)
+        else:
+            buffer.append(line)
+
+    await flush_buffer()
+
 
 @require_role("admin")
 async def show_logs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -36,10 +94,7 @@ async def show_logs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             log_type = candidate
     logs_text = tail_logs(log_type, lines=40)
     message = "📜 最近日志（{}）:\n<pre>{}</pre>".format(log_type, html.escape(logs_text))
-    if update.message:
-        await update.message.reply_text(message, parse_mode="HTML")
-    elif update.effective_chat:
-        await context.bot.send_message(update.effective_chat.id, message, parse_mode="HTML")
+    await _reply_text(update, context, message, parse_mode="HTML")
 
 
 @require_role("admin")
@@ -52,10 +107,7 @@ async def search_logs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             "❌ 参数错误。示例：/search_logs --uid 123456 --cmd /start --since 2024-01-01 "
             "--field status=ok --limit 20"
         )
-        if update.message:
-            await update.message.reply_text(usage)
-        elif update.effective_chat:
-            await context.bot.send_message(update.effective_chat.id, usage)
+        await _reply_text(update, context, usage)
         return
 
     extra_filters = parse_field_filters(args.field)
@@ -94,10 +146,9 @@ async def search_logs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             lines.append(f"• 指令 TOP5：{cmd_text}")
         if not results:
             lines.append("• 没有符合条件的日志记录。")
-        message = "\n".join(lines)
     else:
         if not results:
-            message = "🔍 未找到符合条件的日志记录。"
+            lines = ["🔍 未找到符合条件的日志记录。"]
         else:
             import json
 
@@ -115,12 +166,7 @@ async def search_logs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 lines.append(f"• {ts} | uid={uid} | cmd={cmd}\n  {summary}")
             if has_more:
                 lines.append("… 结果已截断，使用 --limit 调整显示数量。")
-            message = "\n".join(lines)
-
-    if update.message:
-        await update.message.reply_text(message)
-    elif update.effective_chat:
-        await context.bot.send_message(update.effective_chat.id, message)
+    await _reply_lines(update, context, lines)
 
 
 @require_role("super_admin")
