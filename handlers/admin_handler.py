@@ -152,7 +152,7 @@ async def cleanup_tokens(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 logging.warning("Failed to notify super admin %s: %s", admin_id, exc)
 
 
-@require_role("super_admin")
+@require_role("admin")
 async def reload_whitelist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     reloaded = reload_admin_whitelist(force=True, source="command")
     whitelist = sorted(get_super_admin_whitelist())
