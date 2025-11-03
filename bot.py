@@ -5,7 +5,7 @@ import os
 
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters
 
-from creds import TELEGRAM_BOT_TOKEN
+from creds import TELEGRAM_BOT_TOKEN, require_bot_credentials
 from handlers.auth_handler import auth, revoke_tok, token
 from handlers.file_handler import handle_file_message
 from handlers.status_handler import (
@@ -67,6 +67,8 @@ def build_application():
 
 
 def main() -> None:
+    require_bot_credentials()
+
     cleanup_report = run_cleanup(full=False)
     cleanup_summary = cleanup_report.summary()
     logging.info(cleanup_summary)

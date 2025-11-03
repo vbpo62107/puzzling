@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import logging
 import os
+import shutil
 import sys
 import tempfile
 import unittest
@@ -175,6 +176,44 @@ class CleanupScriptTests(unittest.TestCase):
         self.assertIn("Token cleanup", output)
         self.assertIn("token_invalid.json", output)
         self.assertTrue(mock_log_info.called)
+
+
+class CleanupScriptMinimalEnvTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmpdir.cleanup)
+
+        self._saved_env = {}
+        for name in [
+            "TELEGRAM_BOT_TOKEN",
+            "GOOGLE_CLIENT_ID",
+            "GOOGLE_CLIENT_SECRET",
+            "GOOGLE_TOKEN_DIR",
+        ]:
+            self._saved_env[name] = os.environ.pop(name, None)
+
+        os.environ["GOOGLE_TOKEN_DIR"] = self.tmpdir.name
+
+        def restore_env() -> None:
+            for key, value in self._saved_env.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
+        self.addCleanup(restore_env)
+        self.addCleanup(lambda: shutil.rmtree("logs", ignore_errors=True))
+
+        for module_name in ["creds", "puzzling.token_cleanup", "cleanup_tokens"]:
+            sys.modules.pop(module_name, None)
+
+    def test_cleanup_main_succeeds_with_minimal_env(self) -> None:
+        import importlib
+
+        cleanup_script = importlib.import_module("cleanup_tokens")
+        exit_code = cleanup_script.main([])
+
+        self.assertEqual(exit_code, 0)
 
 
 if __name__ == "__main__":
