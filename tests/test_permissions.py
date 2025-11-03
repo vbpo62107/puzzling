@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 import sys
 import tempfile
 import unittest
+from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
 from typing import List
@@ -32,7 +34,7 @@ class RequireRoleLoggingTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(self.tmpdir.cleanup)
 
         self.log_dir = Path(self.tmpdir.name)
-        self.activity_log = self.log_dir / "activity.log"
+        self.log_path = self.log_dir / f"{date.today().isoformat()}.jsonl"
 
         os.environ["LOG_DIRECTORY"] = self.tmpdir.name
         os.environ["USER_STORE_PATH"] = str(self.log_dir / "users.json")
@@ -78,9 +80,18 @@ class RequireRoleLoggingTests(unittest.IsolatedAsyncioTestCase):
         for handler in logging.getLogger("activity").handlers:
             handler.flush()
 
-        content = self.activity_log.read_text(encoding="utf-8")
-        self.assertIn("sample_handler pass", content)
-        self.assertIn("[user=123][role=admin]", content)
+        self.assertTrue(self.log_path.exists())
+        entries = [
+            json.loads(line)
+            for line in self.log_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        activity_entries = [entry for entry in entries if entry.get("category") == "activity"]
+        self.assertTrue(activity_entries)
+        last_entry = activity_entries[-1]
+        self.assertEqual(last_entry["command"], "sample_handler")
+        self.assertEqual(last_entry["verification"], "pass")
+        self.assertEqual(last_entry["user"], {"id": 123, "role": "admin"})
         self.assertEqual(message.sent, [])
 
     async def test_require_role_logs_denial(self) -> None:
@@ -108,9 +119,18 @@ class RequireRoleLoggingTests(unittest.IsolatedAsyncioTestCase):
         for handler in logging.getLogger("activity").handlers:
             handler.flush()
 
-        content = self.activity_log.read_text(encoding="utf-8")
-        self.assertIn("restricted_handler deny", content)
-        self.assertIn("[user=789][role=user]", content)
+        self.assertTrue(self.log_path.exists())
+        entries = [
+            json.loads(line)
+            for line in self.log_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        activity_entries = [entry for entry in entries if entry.get("category") == "activity"]
+        self.assertTrue(activity_entries)
+        last_entry = activity_entries[-1]
+        self.assertEqual(last_entry["command"], "restricted_handler")
+        self.assertEqual(last_entry["verification"], "deny")
+        self.assertEqual(last_entry["user"], {"id": 789, "role": "user"})
         self.assertEqual(message.sent, ["❌ 权限不足，无法执行该操作。"])
         self.assertEqual(context.bot.sent_messages, [])
 

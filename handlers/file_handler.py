@@ -101,7 +101,9 @@ async def handle_file_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             user_id or 0,
             user_role,
             "auth_missing",
-            f"corrupt={token_corrupt}",
+            source="handlers.file",
+            verification="token_corrupt" if token_corrupt else "token_missing",
+            metadata={"corrupt": token_corrupt},
         )
         if token_corrupt:
             prompt_text = (
@@ -133,10 +135,22 @@ async def handle_file_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     forward_source = _extract_forward_source(update) if ENABLE_FORWARD_INFO else None
 
     logging.info("📦 收到来自用户ID %s 的文件：%s", user_id, display_name)
-    log_activity(user_id or 0, user_role, "receive_file", f"file={display_name}")
+    log_activity(
+        user_id or 0,
+        user_role,
+        "receive_file",
+        source="handlers.file",
+        metadata={"file": display_name},
+    )
     if forward_source:
         logging.info("↪️ 文件转发来源：%s", forward_source)
-        log_activity(user_id or 0, user_role, "forward_source", forward_source)
+        log_activity(
+            user_id or 0,
+            user_role,
+            "forward_source",
+            source="handlers.file",
+            metadata={"forward_source": forward_source},
+        )
 
     update_status(user_id, stage="任务已创建，准备下载", progress=5, filename=display_name)
     status_message = await context.bot.send_message(
@@ -193,7 +207,13 @@ async def handle_file_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             user_id or 0,
             user_role,
             "upload_success",
-            f"file={display_name} size={size_mb}MB link={file_link}",
+            source="handlers.file",
+            metadata={
+                "file": display_name,
+                "size_mb": size_mb,
+                "link": file_link,
+                "forward_source": forward_source,
+            },
         )
         await status_message.edit_text(response_text, parse_mode=ParseMode.HTML)
 
@@ -203,7 +223,13 @@ async def handle_file_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             await status_message.edit_text("🛑 上传任务已终止。")
         else:
             logging.error("❌ 上传失败：%s", error, exc_info=True)
-            log_activity(user_id or 0, user_role, "upload_failed", str(error))
+            log_activity(
+                user_id or 0,
+                user_role,
+                "upload_failed",
+                source="handlers.file",
+                metadata={"error": str(error)},
+            )
             await status_message.edit_text(format_error("上传失败，请稍后重试。"))
     except Exception as error:
         logging.exception("❌ 文件上传流程出现未捕获的异常：%s", error)

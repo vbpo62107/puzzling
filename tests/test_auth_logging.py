@@ -67,7 +67,12 @@ class AuthLoggingTests(unittest.IsolatedAsyncioTestCase):
             chat_id=user_id, text=expected_prompt
         )
         mock_log_activity.assert_called_once_with(
-            user_id, "user", "auth_missing", "corrupt=True"
+            user_id,
+            "user",
+            "auth_missing",
+            source="handlers.upload",
+            verification="token_corrupt",
+            metadata={"corrupt": True},
         )
 
     async def test_file_handler_logs_missing_auth(self) -> None:
@@ -97,7 +102,12 @@ class AuthLoggingTests(unittest.IsolatedAsyncioTestCase):
             chat_id=user_id, text=expected_prompt
         )
         mock_log_activity.assert_called_once_with(
-            user_id, "user", "auth_missing", "corrupt=False"
+            user_id,
+            "user",
+            "auth_missing",
+            source="handlers.file",
+            verification="token_missing",
+            metadata={"corrupt": False},
         )
 
 

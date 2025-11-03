@@ -8,10 +8,10 @@
 
 ## 日志与监控体系
 - 新增 `monitoring.py`：
-  - 使用 `TimedRotatingFileHandler` 生成 `system.log`、`activity.log`、`stats.log` 三类日志，按日轮换并可通过 `LOG_RETENTION_DAYS` 控制保留时长。
-  - 提供 `log_activity`、`log_system_info`、`record_upload` 等接口，分别记录用户行为、系统状态、上传统计。
+  - 以 JSON Lines 结构写入 `logs/YYYY-MM-DD.jsonl`，同一文件包含 `system`、`activity`、`stats` 等分类事件，可通过 `LOG_RETENTION_DAYS` 控制按日清理。
+  - 提供 `log_activity`、`log_system_info`、`record_upload` 等接口，输出含时间戳、用户、命令来源、校验结果与耗时等结构化字段，便于审计与分析。
   - `/status` 在无上传任务时，若用户具备管理员权限，会展示当日上传次数与总上传量。
-  - `/logs` 命令（管理员）可查看最近的系统 / 行为 / 统计日志片段。
+  - `/logs` 命令（管理员）可查看最近的系统 / 行为 / 统计日志片段，输出 JSONL 原文以便进一步处理。
 
 ## 权限管理机制
 - 新增 `permissions.py`，支持三种角色：
