@@ -25,13 +25,12 @@ class TokenCleanupTests(unittest.TestCase):
         self.addCleanup(lambda: os.environ.pop("GOOGLE_CLIENT_ID", None))
         self.addCleanup(lambda: os.environ.pop("GOOGLE_CLIENT_SECRET", None))
 
-        for module_name in ("token_cleanup", "creds"):
-            if module_name in sys.modules:
-                del sys.modules[module_name]
+        for module_name in ("puzzling.token_cleanup", "puzzling", "creds"):
+            sys.modules.pop(module_name, None)
 
         import importlib
 
-        self.token_cleanup = importlib.import_module("token_cleanup")
+        self.token_cleanup = importlib.import_module("puzzling.token_cleanup")
 
     def _create_token(self, name: str, payload: dict | None = None) -> Path:
         path = self.token_dir / name

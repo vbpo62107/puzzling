@@ -20,7 +20,7 @@ from handlers.status_handler import (
 from handlers.upload_handler import upload
 from handlers.admin_handler import add_user, list_users_command, remove_user_command, show_logs
 from monitoring import log_system_info, setup_logging, trigger_admin_alert
-from token_cleanup import scan_tokens
+from puzzling.token_cleanup import scan_tokens
 
 LOG_LEVEL_NAME = os.getenv("LOG_LEVEL", "INFO").upper()
 setup_logging(LOG_LEVEL_NAME)
