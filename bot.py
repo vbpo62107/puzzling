@@ -18,9 +18,15 @@ from handlers.status_handler import (
     updates,
 )
 from handlers.upload_handler import upload
-from handlers.admin_handler import add_user, list_users_command, remove_user_command, show_logs
+from handlers.admin_handler import (
+    add_user,
+    cleanup_tokens as cleanup_tokens_command,
+    list_users_command,
+    remove_user_command,
+    show_logs,
+)
 from monitoring import log_system_info, setup_logging, trigger_admin_alert
-from puzzling.token_cleanup import scan_tokens
+from puzzling.token_cleanup import run_cleanup
 
 LOG_LEVEL_NAME = os.getenv("LOG_LEVEL", "INFO").upper()
 setup_logging(LOG_LEVEL_NAME)
@@ -44,6 +50,7 @@ def build_application():
     application.add_handler(CommandHandler("adduser", add_user))
     application.add_handler(CommandHandler("removeuser", remove_user_command))
     application.add_handler(CommandHandler("users", list_users_command))
+    application.add_handler(CommandHandler("cleanup", cleanup_tokens_command))
 
     application.add_handler(
         MessageHandler(
@@ -60,7 +67,7 @@ def build_application():
 
 
 def main() -> None:
-    cleanup_report = scan_tokens(mode="quick")
+    cleanup_report = run_cleanup(full=False)
     cleanup_summary = cleanup_report.summary()
     logging.info(cleanup_summary)
     log_system_info(cleanup_summary)

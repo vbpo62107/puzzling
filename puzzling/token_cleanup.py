@@ -39,6 +39,7 @@ class TokenIssue:
 
     path: Path
     reason: str
+    deleted_at: datetime
 
 
 @dataclass
@@ -188,7 +189,9 @@ def scan_tokens(mode: ScanMode = "quick", base_dir: Optional[Path] = None) -> To
             try:
                 token_file.unlink()
                 logger.warning("Removed token file %s (%s)", token_file, reason_text)
-                report.deleted_files.append(TokenIssue(path=token_file, reason=reason_text))
+                report.deleted_files.append(
+                    TokenIssue(path=token_file, reason=reason_text, deleted_at=now)
+                )
             except Exception as exc:  # pragma: no cover - defensive
                 error_text = f"Failed to delete {token_file}: {exc}"
                 logger.exception(error_text)
@@ -202,4 +205,22 @@ def scan_tokens(mode: ScanMode = "quick", base_dir: Optional[Path] = None) -> To
     return report
 
 
-__all__ = ["scan_tokens", "TokenScanReport", "TokenIssue", "ScanMode"]
+def run_cleanup(full: bool = False, base_dir: Optional[Path] = None) -> TokenScanReport:
+    """Execute a token cleanup pass.
+
+    Args:
+        full: When ``True`` performs the comprehensive scan (equivalent to
+            ``mode="full"``); otherwise runs the quick scan.
+        base_dir: Optional override for the token directory, primarily useful
+            in tests.
+
+    Returns:
+        A :class:`TokenScanReport` describing the actions taken, including
+        timestamps for deleted files.
+    """
+
+    mode: ScanMode = "full" if full else "quick"
+    return scan_tokens(mode=mode, base_dir=base_dir)
+
+
+__all__ = ["scan_tokens", "run_cleanup", "TokenScanReport", "TokenIssue", "ScanMode"]

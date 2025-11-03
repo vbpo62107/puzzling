@@ -1,10 +1,19 @@
-﻿import html
+import html
+import logging
+from typing import Set
 
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from monitoring import get_today_stats, tail_logs
-from permissions import list_users, remove_user, require_role, set_user_role
+from monitoring import tail_logs
+from permissions import (
+    DEFAULT_SUPER_ADMINS,
+    list_users,
+    remove_user,
+    require_role,
+    set_user_role,
+)
+from puzzling.token_cleanup import TokenIssue, run_cleanup
 
 ROLES = {"user", "admin", "super_admin"}
 
@@ -66,3 +75,75 @@ async def list_users_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         name = data.get("name") or "-"
         lines.append(f"• {uid} -> {role}（备注：{name}）")
     await update.message.reply_text("\n".join(lines))
+
+
+def _format_issue(issue: TokenIssue) -> str:
+    timestamp = issue.deleted_at.astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
+    return f"• {issue.path.name} ({timestamp}) - {issue.reason}"
+
+
+def _gather_super_admin_ids() -> Set[int]:
+    ids: Set[int] = {
+        int(uid)
+        for uid, data in list_users().items()
+        if data.get("role") == "super_admin" and str(uid).isdigit()
+    }
+    ids.update(DEFAULT_SUPER_ADMINS)
+    return ids
+
+
+@require_role("admin")
+async def cleanup_tokens(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id if update.effective_user else None
+    chat_id = update.effective_chat.id if update.effective_chat else None
+
+    report = run_cleanup(full=True)
+    summary = report.summary()
+
+    logging.info("Token cleanup requested by %s: %s", user_id, summary)
+    for issue in report.deleted_files:
+        logging.info(
+            "Deleted token file %s at %s (%s)",
+            issue.path,
+            issue.deleted_at.isoformat(),
+            issue.reason,
+        )
+    for error in report.errors:
+        logging.error("Token cleanup error: %s", error)
+
+    lines = [
+        "🧹 Token cleanup 已完成（full 模式）",
+        f"• 基础目录：{report.base_dir}",
+        f"• 总文件数：{report.total_files}",
+        f"• 删除文件数：{report.deleted_count}",
+        f"• 保留文件数：{report.kept_files}",
+    ]
+
+    if report.deleted_files:
+        lines.append("• 删除详情：")
+        lines.extend(_format_issue(issue) for issue in report.deleted_files)
+    if report.errors:
+        lines.append("• 错误：")
+        lines.extend(f"  - {error}" for error in report.errors)
+
+    message = "\n".join(lines)
+
+    if update.message:
+        await update.message.reply_text(message)
+    elif chat_id is not None:
+        await context.bot.send_message(chat_id=chat_id, text=message)
+
+    if report.deleted_files:
+        dm_lines = [
+            "⚠️ Token cleanup 删除了以下凭据：",
+            *(_format_issue(issue) for issue in report.deleted_files),
+        ]
+        dm_text = "\n".join(dm_lines)
+
+        for admin_id in _gather_super_admin_ids():
+            if admin_id is None:
+                continue
+            try:
+                await context.bot.send_message(chat_id=admin_id, text=dm_text)
+            except Exception as exc:  # pragma: no cover - defensive
+                logging.warning("Failed to notify super admin %s: %s", admin_id, exc)
