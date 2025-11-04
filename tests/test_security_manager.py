@@ -149,5 +149,163 @@ class InterceptorWhitelistAdminTests(unittest.IsolatedAsyncioTestCase):
         context.bot.send_message.assert_not_called()
 
 
+class RateLimiterIntegrationTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmpdir.cleanup)
+
+        self.env_path = Path(self.tmpdir.name) / ".env"
+        # Provide broad whitelist coverage for tests exercising ADMIN behaviour.
+        self.env_path.write_text("USER_WHITELIST=500,600,700\n", encoding="utf-8")
+
+        os.environ["GOOGLE_TOKEN_DIR"] = self.tmpdir.name
+        self.addCleanup(lambda: os.environ.pop("GOOGLE_TOKEN_DIR", None))
+
+        self.rate_limits = {
+            "auth": {
+                "name": "auth:user",
+                "limit": 1,
+                "interval": 60,
+                "cooldown_seconds": 10,
+                "scope": "user",
+                "levels": ["public"],
+            },
+            "upload": {
+                "name": "upload:user",
+                "limit": 1,
+                "interval": 60,
+                "cooldown_seconds": 10,
+                "scope": "user",
+                "levels": ["authorized"],
+            },
+            "transfer": {
+                "name": "transfer:user",
+                "limit": 1,
+                "interval": 60,
+                "cooldown_seconds": 10,
+                "scope": "user",
+                "levels": ["admin"],
+            },
+        }
+
+    def _make_manager(self) -> PermissionManager:
+        return PermissionManager(
+            env_path=self.env_path,
+            cache_ttl_seconds=1,
+            rate_limits=self.rate_limits,
+        )
+
+    async def test_auth_rate_limit_enforced(self) -> None:
+        user_id = 500
+        manager = self._make_manager()
+
+        calls: list[str] = []
+
+        @secure("auth", SecurityLevel.PUBLIC, manager=manager)
+        async def auth_handler(update, context):  # pragma: no cover - exercised in test
+            calls.append("auth")
+            return "ok"
+
+        message = DummyMessage()
+        update = SimpleNamespace(
+            effective_user=SimpleNamespace(id=user_id),
+            effective_chat=SimpleNamespace(id=555),
+            effective_message=message,
+        )
+        context = SimpleNamespace(bot=SimpleNamespace(send_message=AsyncMock()))
+
+        with patch("security.interceptor.get_user_role", return_value="user"), patch(
+            "security.interceptor.log_activity"
+        ) as mock_log, patch(
+            "security.interceptor.record_rate_limit_hit"
+        ) as mock_metric:
+            await auth_handler(update, context)
+            await auth_handler(update, context)
+
+        self.assertEqual(calls, ["auth"])
+        self.assertEqual(
+            message.sent,
+            [DENIAL_MESSAGES[AccessDecision.RATE_LIMITED]],
+        )
+        mock_metric.assert_called_once()
+        metric_args, _ = mock_metric.call_args
+        self.assertEqual(metric_args[:2], ("auth", "auth:user"))
+        self.assertEqual(metric_args[5]["command"], "auth")
+        log_kwargs = mock_log.call_args.kwargs
+        self.assertEqual(log_kwargs["verification"], AccessDecision.RATE_LIMITED)
+        self.assertIn("metadata", log_kwargs)
+        self.assertEqual(log_kwargs["metadata"].get("limit"), "auth:user")
+
+    async def test_upload_rate_limit_deduplicates_notifications(self) -> None:
+        user_id = 600
+        manager = self._make_manager()
+
+        calls: list[str] = []
+
+        @secure("upload", SecurityLevel.AUTHORIZED, manager=manager)
+        async def upload_handler(update, context):  # pragma: no cover - exercised in test
+            calls.append("upload")
+            return "ok"
+
+        message = DummyMessage()
+        update = SimpleNamespace(
+            effective_user=SimpleNamespace(id=user_id),
+            effective_chat=SimpleNamespace(id=777),
+            effective_message=message,
+        )
+        context = SimpleNamespace(bot=SimpleNamespace(send_message=AsyncMock()))
+
+        with patch.object(manager, "_has_token_cached", return_value=True), patch(
+            "security.interceptor.get_user_role", return_value="user"
+        ), patch("security.interceptor.log_activity") as mock_log, patch(
+            "security.interceptor.record_rate_limit_hit"
+        ) as mock_metric:
+            await upload_handler(update, context)
+            await upload_handler(update, context)
+            await upload_handler(update, context)
+
+        self.assertEqual(calls, ["upload"])
+        self.assertEqual(
+            message.sent,
+            [DENIAL_MESSAGES[AccessDecision.RATE_LIMITED]],
+        )
+        self.assertEqual(mock_metric.call_count, 2)
+        self.assertEqual(mock_log.call_count, 2)
+
+    async def test_transfer_rate_limit_enforced_for_admin(self) -> None:
+        user_id = 700
+        manager = self._make_manager()
+
+        calls: list[str] = []
+
+        @secure("transfer", SecurityLevel.ADMIN, manager=manager)
+        async def transfer_handler(update, context):  # pragma: no cover
+            calls.append("transfer")
+            return "ok"
+
+        message = DummyMessage()
+        update = SimpleNamespace(
+            effective_user=SimpleNamespace(id=user_id),
+            effective_chat=SimpleNamespace(id=999),
+            effective_message=message,
+        )
+        context = SimpleNamespace(bot=SimpleNamespace(send_message=AsyncMock()))
+
+        with patch("security.manager.has_permission", return_value=True), patch(
+            "security.interceptor.get_user_role", return_value="admin"
+        ), patch("security.interceptor.log_activity") as mock_log, patch(
+            "security.interceptor.record_rate_limit_hit"
+        ) as mock_metric:
+            await transfer_handler(update, context)
+            await transfer_handler(update, context)
+
+        self.assertEqual(calls, ["transfer"])
+        self.assertEqual(
+            message.sent,
+            [DENIAL_MESSAGES[AccessDecision.RATE_LIMITED]],
+        )
+        mock_metric.assert_called()
+        self.assertEqual(mock_log.call_args.kwargs["verification"], AccessDecision.RATE_LIMITED)
+
 if __name__ == "__main__":
     unittest.main()

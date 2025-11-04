@@ -77,7 +77,7 @@ def setup_logging(level_name: str = "INFO") -> None:
     )
     root.addHandler(console_handler)
 
-    for logger_name in ("system", "activity", "stats", "auth"):
+    for logger_name in ("system", "activity", "stats", "auth", "rate_limit"):
         logger = logging.getLogger(logger_name)
         logger.setLevel(logging.INFO)
         logger.handlers.clear()
@@ -114,6 +114,37 @@ def log_activity(
     if metadata:
         payload["metadata"] = metadata
     _write_log_entry("activity", payload)
+
+
+def record_rate_limit_hit(
+    command: str,
+    limit_name: Optional[str],
+    user_id: Optional[int],
+    role: Optional[str],
+    retry_after: Optional[float] = None,
+    extra: Optional[Dict[str, Any]] = None,
+) -> None:
+    logger = logging.getLogger("rate_limit")
+    logger.warning(
+        "Rate limit triggered command=%s limit=%s user=%s role=%s retry_after=%s extra=%s",
+        command,
+        limit_name,
+        user_id,
+        role,
+        retry_after,
+        extra,
+    )
+
+    payload: Dict[str, Any] = {
+        "command": command,
+        "limit": limit_name,
+        "user": {"id": user_id, "role": role},
+        "retry_after": retry_after,
+    }
+    if extra:
+        payload["metadata"] = extra
+
+    _write_log_entry("rate_limit", payload)
 
 
 def log_system_error(message: str, exc: Optional[BaseException] = None) -> None:

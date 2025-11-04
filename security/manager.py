@@ -7,12 +7,13 @@ from dataclasses import dataclass
 from enum import Enum
 from functools import lru_cache
 from pathlib import Path
-from typing import Iterable, Optional, Set, Tuple
+from typing import Any, Dict, Iterable, Optional, Set, Tuple
 
 from dotenv import dotenv_values
 
 from creds import get_google_token_base_dir, get_user_token_path
 from permissions import has_permission
+from .rate_limiter import RATE_LIMIT_CLASS_MAP, RATE_LIMITS, RateLimiterService
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,7 @@ class AccessDecision:
     allowed: bool
     reason: str
     via: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
 
     # Decision constants
     ALLOW = "allow"
@@ -63,6 +65,9 @@ class PermissionManager:
         whitelist_keys: Iterable[str] = DEFAULT_WHITELIST_KEYS,
         *,
         cache_ttl_seconds: int = 30,
+        rate_limit_service: Optional[RateLimiterService] = None,
+        rate_limits: Optional[Dict[str, Any]] = None,
+        rate_limit_class_map: Optional[Dict[str, Any]] = None,
     ) -> None:
         self._env_path = env_path
         self._whitelist_keys = tuple(dict.fromkeys(whitelist_keys))
@@ -73,6 +78,12 @@ class PermissionManager:
         self._ensure_token_dir()
         self.reload_whitelist()
         self._preload_token_ids()
+        if rate_limit_service is not None:
+            self._rate_limiter = rate_limit_service
+        else:
+            limits_config = rate_limits if rate_limits is not None else RATE_LIMITS
+            class_map = rate_limit_class_map if rate_limit_class_map is not None else RATE_LIMIT_CLASS_MAP
+            self._rate_limiter = RateLimiterService.from_settings(limits_config, class_map)
 
     def _ensure_token_dir(self) -> None:
         try:
@@ -142,11 +153,20 @@ class PermissionManager:
         self._token_ids.discard(user_id)
         self._token_lookup.cache_clear()
 
-    def evaluate_access(self, user_id: Optional[int], level: SecurityLevel) -> AccessDecision:
+    def evaluate_access(
+        self,
+        user_id: Optional[int],
+        level: SecurityLevel,
+        *,
+        command_name: Optional[str] = None,
+    ) -> AccessDecision:
         if user_id is None:
             return AccessDecision(False, AccessDecision.DENY_UNAUTHORIZED_MISSING_USER)
 
         if level is SecurityLevel.PUBLIC:
+            limited = self._maybe_rate_limit(user_id, level, command_name)
+            if limited:
+                return limited
             return AccessDecision(True, AccessDecision.ALLOW, via="public")
 
         is_whitelisted = self.is_whitelisted(user_id)
@@ -156,15 +176,24 @@ class PermissionManager:
                 return AccessDecision(False, AccessDecision.DENY_NOT_WHITELISTED)
             if not has_permission(user_id, "admin"):
                 return AccessDecision(False, AccessDecision.DENY_UNAUTHORIZED_ADMIN_REQUIRED)
+            limited = self._maybe_rate_limit(user_id, level, command_name)
+            if limited:
+                return limited
             return AccessDecision(True, AccessDecision.ALLOW, via="whitelist")
 
         if is_whitelisted:
+            limited = self._maybe_rate_limit(user_id, level, command_name)
+            if limited:
+                return limited
             return AccessDecision(True, AccessDecision.ALLOW, via="whitelist")
 
         if not self._has_token_cached(user_id):
             return AccessDecision(False, AccessDecision.DENY_UNAUTHORIZED_TOKEN_MISSING)
 
         if level is SecurityLevel.AUTHORIZED:
+            limited = self._maybe_rate_limit(user_id, level, command_name)
+            if limited:
+                return limited
             return AccessDecision(True, AccessDecision.ALLOW, via="token")
 
         return AccessDecision(False, AccessDecision.POLICY_ERROR_UNSUPPORTED_LEVEL)
@@ -176,6 +205,33 @@ class PermissionManager:
     @lru_cache(maxsize=1000)
     def _token_lookup(self, bucket: int, user_id: int) -> bool:
         return self.has_token(user_id)
+
+    def _maybe_rate_limit(
+        self,
+        user_id: int,
+        level: SecurityLevel,
+        command_name: Optional[str],
+    ) -> Optional[AccessDecision]:
+        if not command_name or self._rate_limiter is None:
+            return None
+
+        outcome = self._rate_limiter.check(command_name, user_id, level)
+        if outcome.allowed:
+            return None
+
+        metadata: Dict[str, Any] = {
+            "command": command_name,
+            "limit": outcome.limit_name,
+            "retry_after": outcome.retry_after,
+            "cooldown_seconds": outcome.cooldown_seconds,
+            "limit_size": outcome.limit,
+            "interval_seconds": outcome.interval_seconds,
+            "scope": outcome.scope,
+            "level": level.value,
+        }
+
+        via = f"rate_limit:{outcome.limit_name}" if outcome.limit_name else "rate_limit"
+        return AccessDecision(False, AccessDecision.RATE_LIMITED, via=via, metadata=metadata)
 
 
 permission_manager = PermissionManager()

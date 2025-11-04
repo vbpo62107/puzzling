@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import logging
+import threading
+import time
 from functools import wraps
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable, Optional
 
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from monitoring import log_activity
+from monitoring import log_activity, record_rate_limit_hit
 from permissions import get_user_role
 
 from .manager import AccessDecision, PermissionManager, SecurityLevel, permission_manager
@@ -30,6 +32,10 @@ DENIAL_MESSAGES = {
 }
 
 
+_RATE_LIMIT_NOTICE_LOCK = threading.Lock()
+_RATE_LIMIT_NOTICE_STATE: dict[tuple[int, str], float] = {}
+
+
 def _resolve_ids(update: Update) -> tuple[int | None, int | None]:
     user_id = update.effective_user.id if update.effective_user else None
     chat_id = update.effective_chat.id if update.effective_chat else None
@@ -47,6 +53,20 @@ async def _send_denial(update: Update, context: ContextTypes.DEFAULT_TYPE, messa
         await context.bot.send_message(chat_id=update.effective_chat.id, text=message)
 
 
+def _should_send_rate_limit_notice(user_id: Optional[int], limit_name: Optional[str], cooldown: float) -> bool:
+    if user_id is None or not limit_name or cooldown <= 0:
+        return True
+
+    now = time.monotonic()
+    key = (user_id, limit_name)
+    with _RATE_LIMIT_NOTICE_LOCK:
+        previous = _RATE_LIMIT_NOTICE_STATE.get(key)
+        if previous is not None and now - previous < cooldown:
+            return False
+        _RATE_LIMIT_NOTICE_STATE[key] = now
+    return True
+
+
 def secure(
     command_name: str,
     level: SecurityLevel,
@@ -59,26 +79,52 @@ def secure(
         @wraps(func)
         async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args: Any, **kwargs: Any) -> Any:
             user_id, chat_id = _resolve_ids(update)
-            decision: AccessDecision = manager.evaluate_access(user_id, level)
+            decision: AccessDecision = manager.evaluate_access(
+                user_id, level, command_name=command_name
+            )
             role = get_user_role(user_id) if user_id is not None else "unknown"
+            metadata = decision.metadata or {}
 
             if not decision.allowed:
-                message = DENIAL_MESSAGES.get(decision.reason, "❌ Unable to perform this action.")
-                await _send_denial(update, context, message)
-                log_activity(
-                    user_id or 0,
-                    role,
-                    command_name,
-                    source="security.interceptor",
-                    verification=decision.reason,
-                )
+                should_notify = True
+                if decision.reason == AccessDecision.RATE_LIMITED:
+                    limit_name = str(metadata.get("limit") or command_name or "unknown")
+                    retry_after = metadata.get("retry_after")
+                    record_rate_limit_hit(
+                        command_name,
+                        limit_name,
+                        user_id,
+                        role,
+                        retry_after,
+                        metadata if metadata else None,
+                    )
+                    cooldown = float(metadata.get("cooldown_seconds") or 0.0)
+                    should_notify = _should_send_rate_limit_notice(
+                        user_id, limit_name, cooldown
+                    )
+
+                if should_notify:
+                    message = DENIAL_MESSAGES.get(
+                        decision.reason, "❌ Unable to perform this action."
+                    )
+                    await _send_denial(update, context, message)
+
+                log_kwargs = {
+                    "source": "security.interceptor",
+                    "verification": decision.reason,
+                }
+                if decision.reason == AccessDecision.RATE_LIMITED and metadata:
+                    log_kwargs["metadata"] = metadata
+
+                log_activity(user_id or 0, role, command_name, **log_kwargs)
                 logger.info(
-                    "Denied %s for user=%s reason=%s level=%s chat=%s",
+                    "Denied %s for user=%s reason=%s level=%s chat=%s metadata=%s",
                     command_name,
                     user_id,
                     decision.reason,
                     level.value,
                     chat_id,
+                    metadata or None,
                 )
                 return None
 
