@@ -96,6 +96,35 @@ class TokenCleanupTests(unittest.TestCase):
         self.assertEqual(quick_report.mode, "quick")
         self.assertEqual(full_report.mode, "full")
 
+    def test_locked_file_is_skipped_and_reported(self) -> None:
+        try:
+            import fcntl
+        except ImportError:  # pragma: no cover - Windows fallback
+            self.skipTest("fcntl not available for locking test")
+
+        locked = self._create_token("token_locked.json")
+        handle = locked.open("r")
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        self.addCleanup(lambda: handle.close())
+
+        os.environ["TOKEN_LOCK_TIMEOUT_SECONDS"] = "0"
+        self.addCleanup(lambda: os.environ.pop("TOKEN_LOCK_TIMEOUT_SECONDS", None))
+
+        try:
+            report = self.token_cleanup.scan_tokens(mode="quick")
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+
+        self.assertEqual(report.total_files, 1)
+        self.assertEqual(report.deleted_count, 0)
+        self.assertEqual(len(report.skipped_files), 1)
+
+        skipped_issue = report.skipped_files[0]
+        self.assertEqual(skipped_issue.path, locked)
+        self.assertIn("lock", skipped_issue.reason)
+        self.assertIsNone(skipped_issue.deleted_at)
+        self.assertTrue(locked.exists())
+
 
 if __name__ == "__main__":
     unittest.main()
