@@ -22,6 +22,7 @@ from handlers.admin_handler import (
     add_user,
     cleanup_tokens as cleanup_tokens_command,
     list_users_command,
+    reload_whitelist,
     remove_user_command,
     show_logs,
 )
@@ -56,6 +57,12 @@ def build_application():
     application.add_handler(CommandHandler("removeuser", guard("removeuser", SecurityLevel.ADMIN, remove_user_command)))
     application.add_handler(CommandHandler("users", guard("users", SecurityLevel.ADMIN, list_users_command)))
     application.add_handler(CommandHandler("cleanup", guard("cleanup", SecurityLevel.ADMIN, cleanup_tokens_command)))
+    application.add_handler(
+        CommandHandler(
+            "reload_whitelist",
+            guard("reload_whitelist", SecurityLevel.ADMIN, reload_whitelist),
+        )
+    )
 
     application.add_handler(
         MessageHandler(
