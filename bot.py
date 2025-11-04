@@ -24,6 +24,7 @@ from handlers.admin_handler import (
     list_users_command,
     reload_whitelist,
     remove_user_command,
+    search_logs_command,
     show_logs,
 )
 from monitoring import log_system_info, setup_logging, trigger_admin_alert
@@ -53,6 +54,12 @@ def build_application():
     application.add_handler(CommandHandler("cancel", guard("cancel", SecurityLevel.AUTHORIZED, cancel)))
     application.add_handler(CommandHandler("ping", guard("ping", SecurityLevel.PUBLIC, ping)))
     application.add_handler(CommandHandler("logs", guard("logs", SecurityLevel.ADMIN, show_logs)))
+    application.add_handler(
+        CommandHandler(
+            "search_logs",
+            guard("search_logs", SecurityLevel.ADMIN, search_logs_command),
+        )
+    )
     application.add_handler(CommandHandler("adduser", guard("adduser", SecurityLevel.ADMIN, add_user)))
     application.add_handler(CommandHandler("removeuser", guard("removeuser", SecurityLevel.ADMIN, remove_user_command)))
     application.add_handler(CommandHandler("users", guard("users", SecurityLevel.ADMIN, list_users_command)))
