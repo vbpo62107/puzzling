@@ -133,7 +133,18 @@ class PermissionManager:
         if level is SecurityLevel.PUBLIC:
             return AccessDecision(True, "public")
 
-        if self.is_whitelisted(user_id):
+        is_whitelisted = self.is_whitelisted(user_id)
+
+        if level is SecurityLevel.ADMIN:
+            if not has_permission(user_id, "admin"):
+                return AccessDecision(False, "admin_required")
+            if is_whitelisted:
+                return AccessDecision(True, "admin", via="whitelist")
+            if not self._has_token_cached(user_id):
+                return AccessDecision(False, "token_missing")
+            return AccessDecision(True, "admin", via="token")
+
+        if is_whitelisted:
             return AccessDecision(True, "whitelist", via="whitelist")
 
         if not self._has_token_cached(user_id):
@@ -141,11 +152,6 @@ class PermissionManager:
 
         if level is SecurityLevel.AUTHORIZED:
             return AccessDecision(True, "token", via="token")
-
-        if level is SecurityLevel.ADMIN:
-            if has_permission(user_id, "admin"):
-                return AccessDecision(True, "admin", via="token")
-            return AccessDecision(False, "admin_required")
 
         return AccessDecision(False, "unsupported_level")
 
