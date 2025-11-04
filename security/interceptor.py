@@ -15,11 +15,18 @@ from .manager import AccessDecision, PermissionManager, SecurityLevel, permissio
 logger = logging.getLogger(__name__)
 
 DENIAL_MESSAGES = {
-    "missing_user": "❌ 无法识别您的身份，请稍后再试。",
-    "token_missing": "❌ 请先发送 /auth 完成授权后再使用此功能。",
-    "admin_required": "❌ 权限不足，仅管理员可用。",
-    "not_in_whitelist": "❌ 您尚未在管理员白名单中，请联系管理员。",
-    "unsupported_level": "❌ 当前操作暂不支持，请联系管理员。",
+    AccessDecision.DENY_UNAUTHORIZED_MISSING_USER:
+        "❌ I couldn't verify who requested this. Please try again in a private chat.",
+    AccessDecision.DENY_UNAUTHORIZED_TOKEN_MISSING:
+        "❌ Please authenticate with /auth before using this command.",
+    AccessDecision.DENY_UNAUTHORIZED_ADMIN_REQUIRED:
+        "❌ This 🔴 command is reserved for admins. In group chats, run it in a private chat with the bot.",
+    AccessDecision.DENY_NOT_WHITELISTED:
+        "❌ You're not on the admin whitelist yet. Please contact an administrator.",
+    AccessDecision.RATE_LIMITED:
+        "❌ You're sending requests too quickly. Please slow down and try again.",
+    AccessDecision.POLICY_ERROR_UNSUPPORTED_LEVEL:
+        "❌ This request isn't supported. Please contact an administrator.",
 }
 
 
@@ -56,7 +63,7 @@ def secure(
             role = get_user_role(user_id) if user_id is not None else "unknown"
 
             if not decision.allowed:
-                message = DENIAL_MESSAGES.get(decision.reason, "❌ 无法执行该操作。")
+                message = DENIAL_MESSAGES.get(decision.reason, "❌ Unable to perform this action.")
                 await _send_denial(update, context, message)
                 log_activity(
                     user_id or 0,

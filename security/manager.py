@@ -37,9 +37,21 @@ class AccessDecision:
     reason: str
     via: Optional[str] = None
 
-    # Denial reasons
-    NOT_IN_WHITELIST = "not_in_whitelist"
-    DENY_NOT_WHITELISTED = NOT_IN_WHITELIST
+    # Decision constants
+    ALLOW = "allow"
+
+    DENY_UNAUTHORIZED = "deny_unauthorized"
+    DENY_UNAUTHORIZED_MISSING_USER = f"{DENY_UNAUTHORIZED}/missing_user"
+    DENY_UNAUTHORIZED_TOKEN_MISSING = f"{DENY_UNAUTHORIZED}/token_missing"
+    DENY_UNAUTHORIZED_ADMIN_REQUIRED = f"{DENY_UNAUTHORIZED}/admin_required"
+
+    DENY_NOT_WHITELISTED = "deny_not_whitelisted"
+    NOT_IN_WHITELIST = DENY_NOT_WHITELISTED
+
+    RATE_LIMITED = "rate_limited"
+
+    POLICY_ERROR = "policy_error"
+    POLICY_ERROR_UNSUPPORTED_LEVEL = f"{POLICY_ERROR}/unsupported_level"
 
 
 class PermissionManager:
@@ -132,30 +144,30 @@ class PermissionManager:
 
     def evaluate_access(self, user_id: Optional[int], level: SecurityLevel) -> AccessDecision:
         if user_id is None:
-            return AccessDecision(False, "missing_user")
+            return AccessDecision(False, AccessDecision.DENY_UNAUTHORIZED_MISSING_USER)
 
         if level is SecurityLevel.PUBLIC:
-            return AccessDecision(True, "public")
+            return AccessDecision(True, AccessDecision.ALLOW, via="public")
 
         is_whitelisted = self.is_whitelisted(user_id)
 
         if level is SecurityLevel.ADMIN:
             if not is_whitelisted:
-                return AccessDecision(False, AccessDecision.NOT_IN_WHITELIST)
+                return AccessDecision(False, AccessDecision.DENY_NOT_WHITELISTED)
             if not has_permission(user_id, "admin"):
-                return AccessDecision(False, "admin_required")
-            return AccessDecision(True, "admin", via="whitelist")
+                return AccessDecision(False, AccessDecision.DENY_UNAUTHORIZED_ADMIN_REQUIRED)
+            return AccessDecision(True, AccessDecision.ALLOW, via="whitelist")
 
         if is_whitelisted:
-            return AccessDecision(True, "whitelist", via="whitelist")
+            return AccessDecision(True, AccessDecision.ALLOW, via="whitelist")
 
         if not self._has_token_cached(user_id):
-            return AccessDecision(False, "token_missing")
+            return AccessDecision(False, AccessDecision.DENY_UNAUTHORIZED_TOKEN_MISSING)
 
         if level is SecurityLevel.AUTHORIZED:
-            return AccessDecision(True, "token", via="token")
+            return AccessDecision(True, AccessDecision.ALLOW, via="token")
 
-        return AccessDecision(False, "unsupported_level")
+        return AccessDecision(False, AccessDecision.POLICY_ERROR_UNSUPPORTED_LEVEL)
 
     def _has_token_cached(self, user_id: int) -> bool:
         bucket = int(time.time() // self._cache_ttl)
