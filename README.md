@@ -285,6 +285,7 @@ docker run -d \
 | `sudo systemctl status telegram-bot` | 查看服务状态 |
 | `sudo systemctl restart telegram-bot` | 重启服务 |
 | `sudo journalctl -u telegram-bot -f` | 持续查看日志 |
+| `python tools/search_logs.py --summary --uid 123456 --cmd upload` | 离线查询结构化日志（示例） |
 | `source venv/bin/activate && python3 bot.py` | 在前台调试运行 |
 | `python -m compileall bot.py upload.py creds.py plugins mega` | 快速语法检查 |
 
@@ -292,8 +293,20 @@ docker run -d \
   确保服务器能访问 Telegram 与 Google API。
 - Mega downloads may be slow; allow sufficient time.  
   Mega 下载较慢，请耐心等待。
-- If upload fails, inspect logs for codes `UPX11`, `UXP12/13` etc.  
+- If upload fails, inspect logs for codes `UPX11`, `UXP12/13` etc.
   上传失败时，注意日志中的错误代码便于定位问题。
+
+## Structured Log Search / 结构化日志查询
+
+- `/search_logs --uid 123456 --category activity --since 2024-05-20T00:00:00+08:00 --summary`
+  - EN: Query recent activity logs for user `123456` since 2024‑05‑20 (UTC+8), returning both matching entries and emoji-rich summary stats directly in Telegram.
+  - 中文：查询用户 `123456` 自 2024‑05‑20（UTC+8）以来的 activity 日志，并在 Telegram 中返回带统计汇总与表情符号的结果。
+- `python tools/search_logs.py --cmd upload --since 2024-05-01 --limit 50 --summary`
+  - EN: Offline CLI reusing the same filters; prints the latest 50 matches plus aggregated statistics. Add `--json` for machine-readable output or `--summary-only` to hide raw entries.
+  - 中文：使用相同过滤器的离线 CLI，显示最近 50 条匹配记录与汇总结果；可通过 `--json` 输出机器可读数据，`--summary-only` 仅展示统计信息。
+- Supported filters include `--uid`, `--cmd`, `--category`, `--level`, `--source`, `--tag`, `--contains`, `--since`, `--until`, `--limit`, `--order`, 以及 `--field key=value`（支持点号路径如 `metadata.status=ok`）。
+  - EN: Combine filters as needed; `--summary` adds statistics, and CLI extras (`--json`, `--summary-only`) tailor the output format.
+  - 中文：可按需组合上述过滤器；`--summary` 启用统计，CLI 可用 `--json`、`--summary-only` 灵活调整输出形式。
 
 ---
 
