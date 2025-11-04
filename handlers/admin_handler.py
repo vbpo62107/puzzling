@@ -89,7 +89,7 @@ async def list_users_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 def _format_issue(issue: TokenIssue) -> str:
     timestamp = issue.deleted_at.astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
-    return f"• {issue.path.name} ({timestamp}) - {issue.reason}"
+    return f"• {issue.masked_path} ({timestamp}) - {issue.reason}"
 
 
 def _truncate_text(text: str, limit: int = 180) -> str:
@@ -341,7 +341,7 @@ async def cleanup_tokens(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     for issue in report.deleted_files:
         logging.info(
             "Deleted token file %s at %s (%s)",
-            issue.path,
+            issue.masked_path,
             issue.deleted_at.isoformat(),
             issue.reason,
         )
