@@ -19,7 +19,7 @@ from plugins.wdl import wget_dl
 from pySmartDL import SmartDL
 from upload import upload as upload_to_drive
 from mega import Mega
-from google_utils import prepare_user_gauth
+from google_utils import TokenState, prepare_user_gauth
 from pydrive2.auth import GoogleAuth
 UPLOAD_FAIL_PROMPT = format_error("上传失败，请检查授权或网络。")
 
@@ -111,12 +111,21 @@ async def upload(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_role = get_user_role(user_id)
 
     token_file_path = str(get_user_token_path(user_id))
-    gauth, token_corrupt = prepare_user_gauth(user_id, token_file_path)
+    token_result = prepare_user_gauth(user_id, token_file_path)
+    gauth = token_result.gauth
 
-    if gauth is None:
-        reason = "token_corrupt" if token_corrupt else "token_invalid"
+    if token_result.state is not TokenState.VALID or gauth is None:
+        reason_map = {
+            TokenState.CORRUPTED: "token_corrupt",
+            TokenState.REFRESH_FAILED: "refresh_failed",
+            TokenState.ABSENT: "token_absent",
+            TokenState.EXPIRED: "token_expired",
+        }
+        reason = reason_map.get(token_result.state, "token_invalid")
         logging.warning(
-            "⚠️ 用户 ID %s 的授权凭证无效，corrupt=%s。", user_id, token_corrupt
+            "⚠️ 用户 ID %s 的授权凭证无效，state=%s。",
+            user_id,
+            token_result.state.value,
         )
         log_activity(
             user_id or 0,
@@ -124,9 +133,9 @@ async def upload(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "auth_missing",
             source="handlers.upload",
             verification=reason,
-            metadata={"corrupt": token_corrupt},
+            metadata={**token_result.as_metadata()},
         )
-        if token_corrupt:
+        if token_result.state in {TokenState.CORRUPTED, TokenState.REFRESH_FAILED}:
             prompt_text = (
                 f"❌ 用户 ID {user_id} 的授权凭证已失效并被清理，请发送 /auth 重新授权。"
             )

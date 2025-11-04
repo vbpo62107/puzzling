@@ -77,7 +77,7 @@ def setup_logging(level_name: str = "INFO") -> None:
     )
     root.addHandler(console_handler)
 
-    for logger_name in ("system", "activity", "stats"):
+    for logger_name in ("system", "activity", "stats", "auth"):
         logger = logging.getLogger(logger_name)
         logger.setLevel(logging.INFO)
         logger.handlers.clear()
