@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from security.interceptor import DENIAL_MESSAGES, secure
-from security.manager import PermissionManager, SecurityLevel
+from security.manager import AccessDecision, PermissionManager, SecurityLevel
 
 
 class PermissionManagerAdminTests(unittest.TestCase):
@@ -31,12 +31,17 @@ class PermissionManagerAdminTests(unittest.TestCase):
         self.assertFalse(decision.allowed)
         self.assertEqual(decision.reason, "admin_required")
 
-    def test_non_whitelisted_admin_requires_token(self) -> None:
+    def test_non_whitelisted_admin_denied_even_with_token(self) -> None:
+        user_id = 200
+        token_path = Path(self.tmpdir.name) / f"token_{user_id}.json"
+        token_path.write_text("{}", encoding="utf-8")
+        self.manager.register_token(user_id)
+
         with patch("security.manager.has_permission", return_value=True):
-            decision = self.manager.evaluate_access(200, SecurityLevel.ADMIN)
+            decision = self.manager.evaluate_access(user_id, SecurityLevel.ADMIN)
 
         self.assertFalse(decision.allowed)
-        self.assertEqual(decision.reason, "token_missing")
+        self.assertEqual(decision.reason, AccessDecision.NOT_IN_WHITELIST)
 
 
 class DummyMessage:
