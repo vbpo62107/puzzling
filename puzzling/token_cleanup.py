@@ -17,6 +17,7 @@ with enough structured information for logging and alerting.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -47,6 +48,12 @@ class TokenIssue:
     path: Path
     reason: str
     deleted_at: datetime
+
+    @property
+    def masked_path(self) -> str:
+        """Return a privacy-preserving identifier for the token file."""
+
+        return mask_token_identifier(self.path)
 
 
 @dataclass
@@ -91,10 +98,18 @@ def _load_json(path: Path) -> tuple[Optional[dict], Optional[str]]:
         with path.open("r", encoding="utf-8") as handle:
             return json.load(handle), None
     except json.JSONDecodeError as exc:
-        logger.warning("Invalid JSON in %s: %s", path, exc)
+        logger.warning(
+            "Invalid JSON in token %s: %s",
+            mask_token_identifier(path),
+            exc,
+        )
         return None, "invalid JSON"
     except Exception as exc:  # pragma: no cover - defensive
-        logger.warning("Unable to read %s: %s", path, exc)
+        logger.warning(
+            "Unable to read token %s: %s",
+            mask_token_identifier(path),
+            exc,
+        )
         return None, f"unreadable ({exc})"
 
 
@@ -195,12 +210,18 @@ def scan_tokens(mode: ScanMode = "quick", base_dir: Optional[Path] = None) -> To
             reason_text = "; ".join(reasons)
             try:
                 token_file.unlink()
-                logger.warning("Removed token file %s (%s)", token_file, reason_text)
+                logger.warning(
+                    "Removed token file %s (%s)",
+                    mask_token_identifier(token_file),
+                    reason_text,
+                )
                 report.deleted_files.append(
                     TokenIssue(path=token_file, reason=reason_text, deleted_at=now)
                 )
             except Exception as exc:  # pragma: no cover - defensive
-                error_text = f"Failed to delete {token_file}: {exc}"
+                error_text = (
+                    f"Failed to delete token {mask_token_identifier(token_file)}: {exc}"
+                )
                 logger.exception(error_text)
                 report.errors.append(error_text)
         else:
@@ -230,4 +251,21 @@ def run_cleanup(full: bool = False, base_dir: Optional[Path] = None) -> TokenSca
     return scan_tokens(mode=mode, base_dir=base_dir)
 
 
-__all__ = ["scan_tokens", "run_cleanup", "TokenScanReport", "TokenIssue", "ScanMode"]
+def mask_token_identifier(path: Path) -> str:
+    """Return a masked identifier for a token path suitable for logging/output."""
+
+    suffix = "".join(path.suffixes)
+    hasher = hashlib.sha256()
+    hasher.update(str(path).encode("utf-8"))
+    digest = hasher.hexdigest()[:8]
+    return f"token#{digest}{suffix}"
+
+
+__all__ = [
+    "scan_tokens",
+    "run_cleanup",
+    "TokenScanReport",
+    "TokenIssue",
+    "ScanMode",
+    "mask_token_identifier",
+]

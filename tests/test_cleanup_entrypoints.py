@@ -106,6 +106,11 @@ class CleanupCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(mock_log_info.called)
         self.assertTrue(message.sent)
         self.assertIn("Token cleanup 已完成", message.sent[0])
+        expected_identifier = self.token_cleanup.mask_token_identifier(
+            Path(self.tmpdir.name) / "token_old.json"
+        )
+        combined_message = "\n".join(message.sent)
+        self.assertIn(expected_identifier, combined_message)
 
         sent_ids = {chat_id for chat_id, _ in bot.sent_messages}
         self.assertIn(999, sent_ids)
@@ -174,7 +179,10 @@ class CleanupScriptTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         output = buffer.getvalue()
         self.assertIn("Token cleanup", output)
-        self.assertIn("token_invalid.json", output)
+        expected_identifier = self.token_cleanup.mask_token_identifier(
+            Path(self.tmpdir.name) / "token_invalid.json"
+        )
+        self.assertIn(expected_identifier, output)
         self.assertTrue(mock_log_info.called)
 
 

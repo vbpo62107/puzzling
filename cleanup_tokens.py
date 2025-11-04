@@ -13,7 +13,7 @@ from puzzling.token_cleanup import TokenIssue, run_cleanup
 
 def _format_issue(issue: TokenIssue) -> str:
     timestamp = issue.deleted_at.astimezone().isoformat()
-    return f"- {issue.path} ({timestamp}): {issue.reason}"
+    return f"- {issue.masked_path} ({timestamp}): {issue.reason}"
 
 
 def _format_report(report) -> str:
@@ -48,7 +48,9 @@ def main(argv: Iterable[str] | None = None) -> int:
     print(details)
 
     for issue in report.deleted_files:
-        logging.warning("Deleted token file %s (%s)", issue.path, issue.reason)
+        logging.warning(
+            "Deleted token file %s (%s)", issue.masked_path, issue.reason
+        )
     for error in report.errors:
         logging.error("Token cleanup error: %s", error)
 
