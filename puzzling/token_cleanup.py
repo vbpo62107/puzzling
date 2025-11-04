@@ -254,11 +254,11 @@ def run_cleanup(full: bool = False, base_dir: Optional[Path] = None) -> TokenSca
 def mask_token_identifier(path: Path) -> str:
     """Return a masked identifier for a token path suitable for logging/output."""
 
-    filename = path.name or "token"
+    suffix = "".join(path.suffixes)
     hasher = hashlib.sha256()
     hasher.update(str(path).encode("utf-8"))
     digest = hasher.hexdigest()[:8]
-    return f"{filename}#{digest}"
+    return f"token#{digest}{suffix}"
 
 
 __all__ = [
