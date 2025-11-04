@@ -37,6 +37,10 @@ class AccessDecision:
     reason: str
     via: Optional[str] = None
 
+    # Denial reasons
+    NOT_IN_WHITELIST = "not_in_whitelist"
+    DENY_NOT_WHITELISTED = NOT_IN_WHITELIST
+
 
 class PermissionManager:
     """Centralise whitelist and token-driven access decisions."""
@@ -136,13 +140,11 @@ class PermissionManager:
         is_whitelisted = self.is_whitelisted(user_id)
 
         if level is SecurityLevel.ADMIN:
+            if not is_whitelisted:
+                return AccessDecision(False, AccessDecision.NOT_IN_WHITELIST)
             if not has_permission(user_id, "admin"):
                 return AccessDecision(False, "admin_required")
-            if is_whitelisted:
-                return AccessDecision(True, "admin", via="whitelist")
-            if not self._has_token_cached(user_id):
-                return AccessDecision(False, "token_missing")
-            return AccessDecision(True, "admin", via="token")
+            return AccessDecision(True, "admin", via="whitelist")
 
         if is_whitelisted:
             return AccessDecision(True, "whitelist", via="whitelist")

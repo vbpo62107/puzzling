@@ -18,6 +18,7 @@ DENIAL_MESSAGES = {
     "missing_user": "❌ 无法识别您的身份，请稍后再试。",
     "token_missing": "❌ 请先发送 /auth 完成授权后再使用此功能。",
     "admin_required": "❌ 权限不足，仅管理员可用。",
+    "not_in_whitelist": "❌ 您尚未在管理员白名单中，请联系管理员。",
     "unsupported_level": "❌ 当前操作暂不支持，请联系管理员。",
 }
 
