@@ -77,6 +77,22 @@ class StructuredLoggingTests(unittest.TestCase):
         entries = [json.loads(line) for line in today_path.read_text(encoding="utf-8").splitlines()]
         self.assertTrue(any(entry["category"] == "system" for entry in entries))
 
+    def test_system_error_logs_exception_details(self) -> None:
+        error = ValueError("boom")
+
+        self.monitoring.log_system_error("failed", exc=error)
+
+        log_path = Path(self.tmpdir.name) / f"{date.today().isoformat()}.jsonl"
+        contents = log_path.read_text(encoding="utf-8").strip().splitlines()
+        self.assertGreaterEqual(len(contents), 1)
+
+        entry = json.loads(contents[-1])
+        self.assertEqual(entry["category"], "system")
+        self.assertEqual(entry["level"], "ERROR")
+        self.assertEqual(entry["message"], "failed")
+        self.assertEqual(entry["exception"]["type"], "ValueError")
+        self.assertEqual(entry["exception"]["message"], "boom")
+
 
 def logging_shutdown_safe() -> None:
     import logging
