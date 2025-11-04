@@ -49,8 +49,13 @@ def _cleanup_old_logs(today: Optional[date] = None) -> None:
                 continue
 
 
-def _write_log_entry(category: str, payload: Dict[str, Any]) -> None:
-    timestamp = datetime.now(timezone.utc)
+def _write_log_entry(
+    category: str,
+    payload: Dict[str, Any],
+    *,
+    timestamp: Optional[datetime] = None,
+) -> None:
+    timestamp = timestamp or datetime.now(timezone.utc)
     record = {
         "timestamp": timestamp.isoformat(),
         "category": category,
@@ -77,7 +82,7 @@ def setup_logging(level_name: str = "INFO") -> None:
     )
     root.addHandler(console_handler)
 
-    for logger_name in ("system", "activity", "stats", "auth"):
+    for logger_name in ("system", "activity", "stats", "auth", "audit"):
         logger = logging.getLogger(logger_name)
         logger.setLevel(logging.INFO)
         logger.handlers.clear()
@@ -114,6 +119,51 @@ def log_activity(
     if metadata:
         payload["metadata"] = metadata
     _write_log_entry("activity", payload)
+
+
+def log_security_audit(
+    *,
+    ts: Optional[datetime] = None,
+    user_id: Optional[int],
+    chat_type: Optional[str],
+    command: str,
+    decision: str,
+    reason: str,
+    duration_ms: float,
+    policy_version: Optional[str],
+    whitelist_version: Optional[str],
+    corr_id: str,
+) -> None:
+    """Persist a structured security audit entry.
+
+    The payload intentionally excludes message contents or other potentially
+    sensitive metadata while still capturing the decision context required for
+    auditability.
+    """
+
+    timestamp = ts or datetime.now(timezone.utc)
+    logging.getLogger("audit").info(
+        "corr_id=%s decision=%s reason=%s command=%s user_id=%s chat_type=%s",
+        corr_id,
+        decision,
+        reason,
+        command,
+        user_id,
+        chat_type,
+    )
+    payload: Dict[str, Any] = {
+        "ts": timestamp.isoformat(),
+        "user_id": user_id,
+        "chat_type": chat_type,
+        "command": command,
+        "decision": decision,
+        "reason": reason,
+        "duration_ms": round(duration_ms, 3),
+        "policy_version": policy_version,
+        "whitelist_version": whitelist_version,
+        "corr_id": corr_id,
+    }
+    _write_log_entry("security_audit", payload, timestamp=timestamp)
 
 
 def log_system_error(message: str, exc: Optional[BaseException] = None) -> None:

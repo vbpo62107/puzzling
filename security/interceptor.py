@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import logging
+import time
+import uuid
 from functools import wraps
 from typing import Any, Awaitable, Callable
 
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from monitoring import log_activity
+from monitoring import log_security_audit
 from permissions import get_user_role
 
 from .manager import AccessDecision, PermissionManager, SecurityLevel, permission_manager
@@ -59,18 +61,31 @@ def secure(
         @wraps(func)
         async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args: Any, **kwargs: Any) -> Any:
             user_id, chat_id = _resolve_ids(update)
+            started = time.perf_counter()
             decision: AccessDecision = manager.evaluate_access(user_id, level)
             role = get_user_role(user_id) if user_id is not None else "unknown"
+            chat_type = (
+                update.effective_chat.type if update.effective_chat else "unknown"
+            )
+            policy_version = getattr(manager, "policy_version", None)
+            whitelist_version = getattr(manager, "whitelist_version", None)
+            corr_id = uuid.uuid4().hex
 
             if not decision.allowed:
                 message = DENIAL_MESSAGES.get(decision.reason, "❌ Unable to perform this action.")
                 await _send_denial(update, context, message)
-                log_activity(
-                    user_id or 0,
-                    role,
-                    command_name,
-                    source="security.interceptor",
-                    verification=decision.reason,
+                duration_ms = (time.perf_counter() - started) * 1000
+                log_security_audit(
+                    ts=None,
+                    user_id=user_id,
+                    chat_type=chat_type,
+                    command=command_name,
+                    decision="deny",
+                    reason=decision.reason,
+                    duration_ms=duration_ms,
+                    policy_version=policy_version,
+                    whitelist_version=whitelist_version,
+                    corr_id=corr_id,
                 )
                 logger.info(
                     "Denied %s for user=%s reason=%s level=%s chat=%s",
@@ -82,14 +97,31 @@ def secure(
                 )
                 return None
 
-            logger.debug(
-                "Access granted for %s via %s (user=%s role=%s)",
-                command_name,
-                decision.via,
-                user_id,
-                role,
-            )
-            return await func(update, context, *args, **kwargs)
+            try:
+                result = await func(update, context, *args, **kwargs)
+            finally:
+                duration_ms = (time.perf_counter() - started) * 1000
+                log_security_audit(
+                    ts=None,
+                    user_id=user_id,
+                    chat_type=chat_type,
+                    command=command_name,
+                    decision="allow",
+                    reason=decision.reason,
+                    duration_ms=duration_ms,
+                    policy_version=policy_version,
+                    whitelist_version=whitelist_version,
+                    corr_id=corr_id,
+                )
+                logger.debug(
+                    "Access granted for %s via %s (user=%s role=%s corr_id=%s)",
+                    command_name,
+                    decision.via,
+                    user_id,
+                    role,
+                    corr_id,
+                )
+            return result
 
         return wrapper
 
