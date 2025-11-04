@@ -8,11 +8,18 @@ from telegram.ext import ContextTypes
 
 from creds import get_user_token_path
 from exceptions import AuthError
-from google_utils import configure_gauth, ensure_token_storage
+from google_utils import (
+    TokenState,
+    configure_gauth,
+    ensure_token_storage,
+    prepare_user_gauth,
+    store_user_gauth,
+)
 from plugins import TEXT
 from plugins.tok_rec import is_token
 from pydrive2.auth import GoogleAuth
 from security.manager import permission_manager
+from security.token_store import token_store
 
 AUTH_FAIL_PROMPT = "❌ 授权失败，请检查凭证或网络。"
 
@@ -60,41 +67,41 @@ async def auth(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
         user_id = _resolve_user_id(update)
         token_file_path = str(get_user_token_path(user_id))
-        gauth = configure_gauth(GoogleAuth(), token_file_path)
-        ensure_token_storage(token_file_path)
-        try:
-            gauth.LoadCredentialsFile(token_file_path)
-        except Exception as load_error:
-            logging.warning(
-                "⚠️ 用户 %s 的凭证文件无法加载：%s", user_id, load_error, exc_info=True
-            )
-            await _prompt_reauthorization(update, context, gauth)
-            return
+        token_result = prepare_user_gauth(user_id, token_file_path)
+        gauth = token_result.gauth
 
-        if gauth.credentials is None:
+        if token_result.state is TokenState.ABSENT or gauth is None:
             logging.info("ℹ️ 用户 %s 尚未授权，发送授权链接。", user_id)
-            await _prompt_reauthorization(update, context, gauth)
+            await _prompt_reauthorization(update, context, configure_gauth(GoogleAuth(), token_file_path))
             return
 
-        if gauth.access_token_expired:
+        if token_result.state in {TokenState.CORRUPTED, TokenState.REFRESH_FAILED}:
+            logging.warning(
+                "⚠️ 用户 %s 的凭证不可用 (state=%s)，请求重新授权。",
+                user_id,
+                token_result.state.value,
+            )
+            await _prompt_reauthorization(update, context, configure_gauth(GoogleAuth(), token_file_path))
+            return
+
+        if token_result.refreshed:
             try:
-                gauth.Refresh()
-                ensure_token_storage(token_file_path)
-                gauth.SaveCredentialsFile(token_file_path)
-                logging.info("🔄 已为用户 %s 刷新访问令牌。", user_id)
-                if update.effective_chat:
-                    await context.bot.send_message(
-                        chat_id=update.effective_chat.id,
-                        text=TEXT.ALREADY_AUTH,
-                    )
-            except Exception as refresh_error:
+                gauth.Authorize()
+            except Exception as authorize_error:
                 logging.error(
-                    "❌ 刷新用户 %s 的授权凭证失败：%s",
+                    "❌ 刷新后验证用户 %s 的凭证失败：%s",
                     user_id,
-                    refresh_error,
+                    authorize_error,
                     exc_info=True,
                 )
-                await _prompt_reauthorization(update, context, gauth)
+                await _prompt_reauthorization(update, context, configure_gauth(GoogleAuth(), token_file_path))
+                return
+            logging.info("🔄 已为用户 %s 刷新访问令牌。", user_id)
+            if update.effective_chat:
+                await context.bot.send_message(
+                    chat_id=update.effective_chat.id,
+                    text=TEXT.ALREADY_AUTH,
+                )
             return
 
         try:
@@ -106,7 +113,7 @@ async def auth(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 authorize_error,
                 exc_info=True,
             )
-            await _prompt_reauthorization(update, context, gauth)
+            await _prompt_reauthorization(update, context, configure_gauth(GoogleAuth(), token_file_path))
             return
 
         if update.effective_chat:
@@ -169,10 +176,9 @@ async def token(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         except Exception as verify_error:
             raise AuthError("验证授权凭证失败。") from verify_error
 
-        try:
-            gauth.SaveCredentialsFile(token_file_path)
-        except Exception as save_error:
-            raise AuthError("保存授权凭证失败。") from save_error
+        store_result = store_user_gauth(user_id, gauth)
+        if store_result.state is not TokenState.VALID:
+            raise AuthError(f"保存授权凭证失败：{store_result.error or 'unknown'}")
         permission_manager.register_token(user_id)
 
         logging.info("✅ 用户 %s 的授权令牌保存成功。", user_id)
@@ -200,6 +206,7 @@ async def revoke_tok(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         token_file_path = str(get_user_token_path(user_id))
         if os.path.exists(token_file_path):
             os.remove(token_file_path)
+            token_store().clear_cache(user_id)
             permission_manager.unregister_token(user_id)
             logging.info("🔒 已撤销用户 %s 的本地凭证文件。", user_id)
             if update.effective_chat:

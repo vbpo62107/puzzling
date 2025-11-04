@@ -10,7 +10,13 @@ from pydrive2.auth import GoogleAuth
 from pydrive2.drive import GoogleDrive
 
 from creds import GOOGLE_DRIVE_FOLDER_ID
-from google_utils import configure_gauth, ensure_token_storage
+from google_utils import (
+    TokenState,
+    configure_gauth,
+    ensure_token_storage,
+    refresh_user_gauth,
+)
+from security.token_store import token_store
 from exceptions import UploadError
 
 logger = logging.getLogger(__name__)
@@ -80,16 +86,26 @@ def _resolve_destination_folder(
     return None, False
 
 
-def _purge_token_file(token_file_path: str) -> None:
-    token_path = Path(token_file_path).expanduser()
-    if token_path.exists():
+def _quarantine_token(user_id: Optional[int], reason: str, fallback_path: str) -> None:
+    if user_id is not None:
         try:
-            token_path.unlink()
-            logger.info("🧹 已删除损坏的凭证文件：%s", token_path)
-        except Exception as cleanup_error:  # pragma: no cover - defensive logging
+            token_store().quarantine(user_id, reason)
+        except Exception as exc:  # pragma: no cover - defensive
             logger.warning(
-                "⚠️ 删除损坏的凭证文件失败：%s", cleanup_error, exc_info=True
+                "⚠️ 隔离用户 %s 的凭证失败：%s", user_id, exc, exc_info=True
             )
+        return
+
+    token_path = Path(fallback_path).expanduser()
+    if not token_path.exists():
+        return
+    try:
+        token_path.unlink()
+        logger.info("🧹 已删除损坏的凭证文件：%s", token_path)
+    except Exception as cleanup_error:  # pragma: no cover - defensive logging
+        logger.warning(
+            "⚠️ 删除损坏的凭证文件失败：%s", cleanup_error, exc_info=True
+        )
 
 
 def upload(
@@ -108,12 +124,16 @@ def upload(
         filename,
     )
 
-    ensure_token_storage(token_file_path)
-    gauth = configure_gauth(gauth or GoogleAuth(), token_file_path)
+    resolved_path = Path(token_file_path).expanduser()
+    if user_id is not None:
+        resolved_path = token_store().get_token_path(user_id)
+
+    ensure_token_storage(resolved_path)
+    gauth = configure_gauth(gauth or GoogleAuth(), resolved_path)
 
     if getattr(gauth, "credentials", None) is None:
         try:
-            gauth.LoadCredentialsFile(token_file_path)
+            gauth.LoadCredentialsFile(str(resolved_path))
         except Exception as load_error:
             logger.error(
                 "❌ 无法加载用户 %s 的授权凭证：%s",
@@ -121,7 +141,7 @@ def upload(
                 load_error,
                 exc_info=True,
             )
-            _purge_token_file(token_file_path)
+            _quarantine_token(user_id, "load_error", str(resolved_path))
             raise UploadError(
                 f"用户 {user_id or '未知'} 的授权凭证缺失或已损坏，请发送 /auth 重新授权。"
             ) from load_error
@@ -133,28 +153,27 @@ def upload(
 
     if getattr(gauth.credentials, "invalid", False):
         logger.warning("⚠️ 用户 %s 的凭证标记为无效。", user_id)
-        _purge_token_file(token_file_path)
+        _quarantine_token(user_id, "invalid_credentials", str(resolved_path))
         raise UploadError(
             f"用户 {user_id or '未知'} 的授权已失效，请发送 /auth 重新授权。"
         )
 
     if gauth.access_token_expired:
-        try:
-            gauth.Refresh()
-            ensure_token_storage(token_file_path)
-            gauth.SaveCredentialsFile(token_file_path)
-            logger.info("🔄 已刷新用户 %s 的访问令牌。", user_id)
-        except Exception as refresh_error:
+        if user_id is None:
+            raise UploadError("缺少用户信息，无法刷新授权凭证。")
+        refresh_result = refresh_user_gauth(user_id, gauth)
+        gauth = refresh_result.gauth
+        if refresh_result.state is not TokenState.VALID or gauth is None:
             logger.error(
                 "❌ 刷新用户 %s 的授权凭证失败：%s",
                 user_id,
-                refresh_error,
-                exc_info=True,
+                refresh_result.error,
             )
-            _purge_token_file(token_file_path)
+            _quarantine_token(user_id, "refresh_failed", str(resolved_path))
             raise UploadError(
                 f"用户 {user_id or '未知'} 的授权凭证无法刷新，请重新发送 /auth。"
-            ) from refresh_error
+            )
+        logger.info("🔄 已刷新用户 %s 的访问令牌。", user_id)
 
     try:
         gauth.Authorize()
@@ -165,7 +184,7 @@ def upload(
             authorize_error,
             exc_info=True,
         )
-        _purge_token_file(token_file_path)
+        _quarantine_token(user_id, "authorize_failed", str(resolved_path))
         raise UploadError(
             f"用户 {user_id or '未知'} 的授权验证失败，请重新执行 /auth。"
         ) from authorize_error

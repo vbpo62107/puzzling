@@ -5,8 +5,11 @@ import os
 import sys
 import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
+
+from google_utils import TokenLoadResult, TokenState
 
 
 class AuthLoggingTests(unittest.IsolatedAsyncioTestCase):
@@ -53,8 +56,16 @@ class AuthLoggingTests(unittest.IsolatedAsyncioTestCase):
         )
         context = SimpleNamespace(bot=SimpleNamespace(send_message=AsyncMock()))
 
+        corrupt_result = TokenLoadResult(
+            user_id=user_id,
+            path=Path("/tmp/token.json"),
+            state=TokenState.CORRUPTED,
+            gauth=None,
+            error="corrupted",
+        )
+
         with patch.object(
-            self.upload_handler, "prepare_user_gauth", return_value=(None, True)
+            self.upload_handler, "prepare_user_gauth", return_value=corrupt_result
         ), patch.object(
             self.upload_handler, "log_activity"
         ) as mock_log_activity:
@@ -66,14 +77,21 @@ class AuthLoggingTests(unittest.IsolatedAsyncioTestCase):
         context.bot.send_message.assert_awaited_once_with(
             chat_id=user_id, text=expected_prompt
         )
-        mock_log_activity.assert_called_once_with(
-            user_id,
-            "user",
-            "auth_missing",
-            source="handlers.upload",
-            verification="token_corrupt",
-            metadata={"corrupt": True},
-        )
+        mock_log_activity.assert_called_once()
+        args, kwargs = mock_log_activity.call_args
+        self.assertEqual(args, (user_id, "user", "auth_missing"))
+        self.assertEqual(kwargs.get("source"), "handlers.upload")
+        self.assertEqual(kwargs.get("verification"), "token_corrupt")
+        expected_metadata = {
+            "user_id": user_id,
+            "path": str(corrupt_result.path),
+            "state": TokenState.CORRUPTED.value,
+            "refreshed": False,
+            "error": corrupt_result.error,
+            "quarantined_to": None,
+            "latency_ms": 0.0,
+        }
+        self.assertEqual(kwargs.get("metadata"), expected_metadata)
 
     async def test_file_handler_logs_missing_auth(self) -> None:
         user_id = 202
@@ -88,8 +106,15 @@ class AuthLoggingTests(unittest.IsolatedAsyncioTestCase):
         )
         context = SimpleNamespace(bot=SimpleNamespace(send_message=AsyncMock()))
 
+        missing_result = TokenLoadResult(
+            user_id=user_id,
+            path=Path("/tmp/token.json"),
+            state=TokenState.ABSENT,
+            gauth=None,
+        )
+
         with patch.object(
-            self.file_handler, "prepare_user_gauth", return_value=(None, False)
+            self.file_handler, "prepare_user_gauth", return_value=missing_result
         ), patch.object(
             self.file_handler, "log_activity"
         ) as mock_log_activity:
@@ -99,14 +124,21 @@ class AuthLoggingTests(unittest.IsolatedAsyncioTestCase):
         context.bot.send_message.assert_awaited_once_with(
             chat_id=user_id, text=expected_prompt
         )
-        mock_log_activity.assert_called_once_with(
-            user_id,
-            "user",
-            "auth_missing",
-            source="handlers.file",
-            verification="token_invalid",
-            metadata={"corrupt": False},
-        )
+        mock_log_activity.assert_called_once()
+        args, kwargs = mock_log_activity.call_args
+        self.assertEqual(args, (user_id, "user", "auth_missing"))
+        self.assertEqual(kwargs.get("source"), "handlers.file")
+        self.assertEqual(kwargs.get("verification"), "token_absent")
+        expected_metadata = {
+            "user_id": user_id,
+            "path": str(missing_result.path),
+            "state": TokenState.ABSENT.value,
+            "refreshed": False,
+            "error": None,
+            "quarantined_to": None,
+            "latency_ms": 0.0,
+        }
+        self.assertEqual(kwargs.get("metadata"), expected_metadata)
 
 
 if __name__ == "__main__":
