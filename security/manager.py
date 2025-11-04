@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import time
@@ -70,6 +71,11 @@ class PermissionManager:
         self._whitelist_ids: Set[int] = set()
         self._token_ids: Set[int] = set()
         self._token_base_dir = get_google_token_base_dir()
+        self._policy_version = os.getenv(
+            "SECURITY_POLICY_VERSION",
+            os.getenv("POLICY_VERSION", "default"),
+        )
+        self._whitelist_version = "empty"
         self._ensure_token_dir()
         self.reload_whitelist()
         self._preload_token_ids()
@@ -96,6 +102,7 @@ class PermissionManager:
         if ids != self._whitelist_ids:
             logger.info("Loaded %s whitelist IDs: %s", len(ids), sorted(ids))
         self._whitelist_ids = ids
+        self._whitelist_version = self._compute_whitelist_version(ids)
         self._token_lookup.cache_clear()
 
     def _preload_token_ids(self) -> None:
@@ -142,6 +149,14 @@ class PermissionManager:
         self._token_ids.discard(user_id)
         self._token_lookup.cache_clear()
 
+    @property
+    def policy_version(self) -> str:
+        return self._policy_version
+
+    @property
+    def whitelist_version(self) -> str:
+        return self._whitelist_version
+
     def evaluate_access(self, user_id: Optional[int], level: SecurityLevel) -> AccessDecision:
         if user_id is None:
             return AccessDecision(False, AccessDecision.DENY_UNAUTHORIZED_MISSING_USER)
@@ -176,6 +191,15 @@ class PermissionManager:
     @lru_cache(maxsize=1000)
     def _token_lookup(self, bucket: int, user_id: int) -> bool:
         return self.has_token(user_id)
+
+    @staticmethod
+    def _compute_whitelist_version(ids: Set[int]) -> str:
+        if not ids:
+            return "empty"
+        digest = hashlib.sha256(
+            ",".join(str(user_id) for user_id in sorted(ids)).encode("utf-8")
+        ).hexdigest()[:12]
+        return f"{len(ids)}:{digest}"
 
 
 permission_manager = PermissionManager()

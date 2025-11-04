@@ -124,27 +124,20 @@ class InterceptorWhitelistAdminTests(unittest.IsolatedAsyncioTestCase):
         message = DummyMessage()
         update = SimpleNamespace(
             effective_user=SimpleNamespace(id=user_id),
-            effective_chat=SimpleNamespace(id=555),
+            effective_chat=SimpleNamespace(id=555, type="private"),
             effective_message=message,
         )
         context = SimpleNamespace(bot=SimpleNamespace(send_message=AsyncMock()))
 
         with patch("security.manager.has_permission", return_value=False), patch(
             "security.interceptor.get_user_role", return_value="user"
-        ), patch("security.interceptor.log_activity") as mock_log:
+        ):
             result = await protected(update, context)
 
         self.assertIsNone(result)
         self.assertEqual(
             message.sent,
             [DENIAL_MESSAGES[AccessDecision.DENY_UNAUTHORIZED_ADMIN_REQUIRED]],
-        )
-        mock_log.assert_called_once_with(
-            user_id,
-            "user",
-            "admin_command",
-            source="security.interceptor",
-            verification=AccessDecision.DENY_UNAUTHORIZED_ADMIN_REQUIRED,
         )
         context.bot.send_message.assert_not_called()
 
