@@ -96,6 +96,12 @@ class CleanupCommandTests(unittest.IsolatedAsyncioTestCase):
                 deleted_at=datetime.now(timezone.utc),
             )
         )
+        report.skipped_files.append(
+            self.token_cleanup.TokenIssue(
+                path=Path(self.tmpdir.name) / "token_locked.json",
+                reason="lock unavailable",
+            )
+        )
 
         with patch("handlers.admin_handler.run_cleanup", return_value=report) as mock_run, patch(
             "handlers.admin_handler.logging.info"
@@ -106,11 +112,15 @@ class CleanupCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(mock_log_info.called)
         self.assertTrue(message.sent)
         self.assertIn("Token cleanup 已完成", message.sent[0])
-        expected_identifier = self.token_cleanup.mask_token_identifier(
+        deleted_identifier = self.token_cleanup.mask_token_identifier(
             Path(self.tmpdir.name) / "token_old.json"
         )
+        skipped_identifier = self.token_cleanup.mask_token_identifier(
+            Path(self.tmpdir.name) / "token_locked.json"
+        )
         combined_message = "\n".join(message.sent)
-        self.assertIn(expected_identifier, combined_message)
+        self.assertIn(deleted_identifier, combined_message)
+        self.assertIn(skipped_identifier, combined_message)
 
         sent_ids = {chat_id for chat_id, _ in bot.sent_messages}
         self.assertIn(999, sent_ids)
@@ -167,6 +177,12 @@ class CleanupScriptTests(unittest.TestCase):
                 deleted_at=datetime.now(timezone.utc),
             )
         )
+        report.skipped_files.append(
+            self.token_cleanup.TokenIssue(
+                path=Path(self.tmpdir.name) / "token_locked.json",
+                reason="lock unavailable",
+            )
+        )
 
         with patch("cleanup_tokens.run_cleanup", return_value=report) as mock_run, patch(
             "cleanup_tokens.logging.info"
@@ -179,10 +195,14 @@ class CleanupScriptTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         output = buffer.getvalue()
         self.assertIn("Token cleanup", output)
-        expected_identifier = self.token_cleanup.mask_token_identifier(
+        deleted_identifier = self.token_cleanup.mask_token_identifier(
             Path(self.tmpdir.name) / "token_invalid.json"
         )
-        self.assertIn(expected_identifier, output)
+        skipped_identifier = self.token_cleanup.mask_token_identifier(
+            Path(self.tmpdir.name) / "token_locked.json"
+        )
+        self.assertIn(deleted_identifier, output)
+        self.assertIn(skipped_identifier, output)
         self.assertTrue(mock_log_info.called)
 
 

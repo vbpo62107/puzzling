@@ -17,6 +17,7 @@ with enough structured information for logging and alerting.
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import logging
@@ -26,6 +27,17 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterable, List, Literal, Optional
+
+try:  # pragma: no cover - imported lazily for non-POSIX platforms
+    import fcntl
+
+    _FCNTL_AVAILABLE = True
+except ImportError:  # pragma: no cover - Windows fallback
+    fcntl = None  # type: ignore[assignment]
+    _FCNTL_AVAILABLE = False
+
+import time
+import uuid
 
 try:
     from creds import get_google_token_base_dir
@@ -47,7 +59,7 @@ class TokenIssue:
 
     path: Path
     reason: str
-    deleted_at: datetime
+    deleted_at: Optional[datetime] = None
 
     @property
     def masked_path(self) -> str:
@@ -64,6 +76,7 @@ class TokenScanReport:
     mode: ScanMode
     total_files: int = 0
     deleted_files: List[TokenIssue] = field(default_factory=list)
+    skipped_files: List[TokenIssue] = field(default_factory=list)
     kept_files: int = 0
     errors: List[str] = field(default_factory=list)
 
@@ -74,7 +87,7 @@ class TokenScanReport:
     def summary(self) -> str:
         return (
             f"Token cleanup ({self.mode}) scanned {self.total_files} files: "
-            f"deleted={self.deleted_count}, kept={self.kept_files}, "
+            f"deleted={self.deleted_count}, skipped={len(self.skipped_files)}, kept={self.kept_files}, "
             f"errors={len(self.errors)}"
         )
 
@@ -163,6 +176,81 @@ def _read_max_age_days() -> Optional[int]:
         return 180
 
 
+def _read_lock_timeout_seconds() -> float:
+    raw = os.getenv("TOKEN_LOCK_TIMEOUT_SECONDS")
+    if raw is None:
+        return 0.05
+    try:
+        value = float(raw)
+        if value < 0:
+            raise ValueError
+        return value
+    except ValueError:
+        logger.warning(
+            "Invalid TOKEN_LOCK_TIMEOUT_SECONDS value %r; falling back to default",
+            raw,
+        )
+        return 0.05
+
+
+def _try_lock_handle(handle, timeout: float) -> bool:
+    if not _FCNTL_AVAILABLE:
+        return True
+
+    deadline = time.monotonic() + timeout
+    sleep_interval = 0.01
+
+    while True:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except BlockingIOError:
+            if timeout == 0 or time.monotonic() >= deadline:
+                return False
+            time.sleep(min(sleep_interval, max(0.001, timeout)))
+        except OSError:
+            return False
+
+
+def _delete_with_lock(token_file: Path, timeout: float) -> tuple[bool, Optional[str]]:
+    try:
+        with token_file.open("rb") as handle:
+            if not _try_lock_handle(handle, timeout):
+                return False, "lock unavailable"
+            try:
+                token_file.unlink()
+            except FileNotFoundError:
+                pass
+            return True, None
+    except FileNotFoundError:
+        return True, None
+    except Exception as exc:  # pragma: no cover - defensive
+        return False, f"delete failed ({exc})"
+
+
+def _delete_with_rename(token_file: Path) -> tuple[bool, Optional[str]]:
+    temp_name = token_file.with_name(
+        f".{token_file.name}.cleanup-{uuid.uuid4().hex}"
+    )
+    try:
+        token_file.rename(temp_name)
+    except FileNotFoundError:
+        return True, None
+    except OSError as exc:
+        if isinstance(exc, PermissionError) or exc.errno in (errno.EACCES, errno.EPERM):
+            return False, "lock unavailable"
+        return False, f"rename failed ({exc})"
+
+    try:
+        temp_name.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError as exc:  # pragma: no cover - defensive
+        return False, f"unlink renamed file failed ({exc})"
+
+    return True, None
+
+
 def scan_tokens(mode: ScanMode = "quick", base_dir: Optional[Path] = None) -> TokenScanReport:
     """Scan and optionally clean up token files.
 
@@ -183,6 +271,7 @@ def scan_tokens(mode: ScanMode = "quick", base_dir: Optional[Path] = None) -> To
 
     now = datetime.now(timezone.utc)
     max_age_days = _read_max_age_days() if mode == "full" else None
+    lock_timeout = _read_lock_timeout_seconds()
 
     for token_file in _iter_token_files(resolved_base):
         try:
@@ -208,8 +297,12 @@ def scan_tokens(mode: ScanMode = "quick", base_dir: Optional[Path] = None) -> To
 
         if reasons:
             reason_text = "; ".join(reasons)
-            try:
-                token_file.unlink()
+            if _FCNTL_AVAILABLE:
+                deleted, error = _delete_with_lock(token_file, lock_timeout)
+            else:
+                deleted, error = _delete_with_rename(token_file)
+
+            if deleted and error is None:
                 logger.warning(
                     "Removed token file %s (%s)",
                     mask_token_identifier(token_file),
@@ -218,9 +311,34 @@ def scan_tokens(mode: ScanMode = "quick", base_dir: Optional[Path] = None) -> To
                 report.deleted_files.append(
                     TokenIssue(path=token_file, reason=reason_text, deleted_at=now)
                 )
-            except Exception as exc:  # pragma: no cover - defensive
+            elif not deleted and error == "lock unavailable":
+                skip_reason = (
+                    f"{reason_text}; lock unavailable after {lock_timeout:.3f}s"
+                    if lock_timeout > 0
+                    else f"{reason_text}; lock unavailable"
+                )
+                logger.info(
+                    "Skipped deleting token %s because it appears in use (%s)",
+                    mask_token_identifier(token_file),
+                    skip_reason,
+                )
+                report.skipped_files.append(
+                    TokenIssue(path=token_file, reason=skip_reason)
+                )
+            elif deleted:
+                logger.warning(
+                    "Removed token file %s (%s) after rename fallback",
+                    mask_token_identifier(token_file),
+                    reason_text,
+                )
+                report.deleted_files.append(
+                    TokenIssue(path=token_file, reason=reason_text, deleted_at=now)
+                )
+            else:
                 error_text = (
-                    f"Failed to delete token {mask_token_identifier(token_file)}: {exc}"
+                    f"Failed to delete token {mask_token_identifier(token_file)}: {error}"
+                    if error
+                    else f"Failed to delete token {mask_token_identifier(token_file)}"
                 )
                 logger.exception(error_text)
                 report.errors.append(error_text)

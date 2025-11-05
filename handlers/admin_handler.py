@@ -88,7 +88,10 @@ async def list_users_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 def _format_issue(issue: TokenIssue) -> str:
-    timestamp = issue.deleted_at.astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
+    if issue.deleted_at is not None:
+        timestamp = issue.deleted_at.astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
+    else:
+        timestamp = "保留"
     return f"• {issue.masked_path} ({timestamp}) - {issue.reason}"
 
 
@@ -345,6 +348,12 @@ async def cleanup_tokens(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             issue.deleted_at.isoformat(),
             issue.reason,
         )
+    for issue in report.skipped_files:
+        logging.info(
+            "Preserved token file %s (%s)",
+            issue.masked_path,
+            issue.reason,
+        )
     for error in report.errors:
         logging.error("Token cleanup error: %s", error)
 
@@ -353,12 +362,16 @@ async def cleanup_tokens(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         f"• 基础目录：{report.base_dir}",
         f"• 总文件数：{report.total_files}",
         f"• 删除文件数：{report.deleted_count}",
+        f"• 跳过文件数：{len(report.skipped_files)}",
         f"• 保留文件数：{report.kept_files}",
     ]
 
     if report.deleted_files:
         lines.append("• 删除详情：")
         lines.extend(_format_issue(issue) for issue in report.deleted_files)
+    if report.skipped_files:
+        lines.append("• 保留详情：")
+        lines.extend(_format_issue(issue) for issue in report.skipped_files)
     if report.errors:
         lines.append("• 错误：")
         lines.extend(f"  - {error}" for error in report.errors)
@@ -370,11 +383,16 @@ async def cleanup_tokens(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     elif chat_id is not None:
         await context.bot.send_message(chat_id=chat_id, text=message)
 
-    if report.deleted_files:
+    if report.deleted_files or report.skipped_files:
         dm_lines = [
-            "⚠️ Token cleanup 删除了以下凭据：",
-            *(_format_issue(issue) for issue in report.deleted_files),
+            "⚠️ Token cleanup 更新：",
         ]
+        if report.deleted_files:
+            dm_lines.append("删除：")
+            dm_lines.extend(_format_issue(issue) for issue in report.deleted_files)
+        if report.skipped_files:
+            dm_lines.append("保留：")
+            dm_lines.extend(_format_issue(issue) for issue in report.skipped_files)
         dm_text = "\n".join(dm_lines)
 
         for admin_id in _gather_super_admin_ids():
@@ -382,6 +400,18 @@ async def cleanup_tokens(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 continue
             try:
                 await context.bot.send_message(chat_id=admin_id, text=dm_text)
+            except Exception as exc:  # pragma: no cover - defensive
+                logging.warning("Failed to notify super admin %s: %s", admin_id, exc)
+
+    elif report.errors:
+        for admin_id in _gather_super_admin_ids():
+            if admin_id is None:
+                continue
+            try:
+                await context.bot.send_message(
+                    chat_id=admin_id,
+                    text="⚠️ Token cleanup 产生错误，请检查日志。",
+                )
             except Exception as exc:  # pragma: no cover - defensive
                 logging.warning("Failed to notify super admin %s: %s", admin_id, exc)
 

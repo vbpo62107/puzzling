@@ -12,7 +12,10 @@ from puzzling.token_cleanup import TokenIssue, run_cleanup
 
 
 def _format_issue(issue: TokenIssue) -> str:
-    timestamp = issue.deleted_at.astimezone().isoformat()
+    if issue.deleted_at is not None:
+        timestamp = issue.deleted_at.astimezone().isoformat()
+    else:
+        timestamp = "preserved"
     return f"- {issue.masked_path} ({timestamp}): {issue.reason}"
 
 
@@ -21,6 +24,9 @@ def _format_report(report) -> str:
     if report.deleted_files:
         lines.append("Deleted tokens:")
         lines.extend(_format_issue(issue) for issue in report.deleted_files)
+    if report.skipped_files:
+        lines.append("Preserved tokens:")
+        lines.extend(_format_issue(issue) for issue in report.skipped_files)
     if report.errors:
         lines.append("Errors:")
         lines.extend(f"  * {error}" for error in report.errors)
