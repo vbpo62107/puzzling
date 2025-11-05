@@ -2,6 +2,7 @@
 
 import logging
 import os
+from datetime import timedelta
 
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters
 
@@ -31,6 +32,11 @@ from monitoring import log_system_info, setup_logging, trigger_admin_alert
 from puzzling.token_cleanup import run_cleanup
 from security.interceptor import secure
 from security.manager import SecurityLevel
+from security.maintenance import (
+    DEFAULT_BATCH_SIZE,
+    DEFAULT_REFRESH_AHEAD,
+    run_token_health_check,
+)
 
 LOG_LEVEL_NAME = os.getenv("LOG_LEVEL", "INFO").upper()
 setup_logging(LOG_LEVEL_NAME)
@@ -89,6 +95,62 @@ def build_application():
             guard("token", SecurityLevel.PUBLIC, token),
         )
     )
+
+    job_queue = application.job_queue
+    if job_queue is not None:
+        interval_raw = os.getenv("TOKEN_MAINTENANCE_INTERVAL_MINUTES", "15")
+        try:
+            interval_minutes = max(1, int(interval_raw))
+        except ValueError:
+            logging.warning(
+                "Invalid TOKEN_MAINTENANCE_INTERVAL_MINUTES value %r; defaulting to 15",
+                interval_raw,
+            )
+            interval_minutes = 15
+
+        batch_raw = os.getenv("TOKEN_MAINTENANCE_BATCH_SIZE")
+        refresh_raw = os.getenv("TOKEN_MAINTENANCE_REFRESH_AHEAD_MINUTES")
+
+        batch_size = DEFAULT_BATCH_SIZE
+        refresh_ahead = DEFAULT_REFRESH_AHEAD
+
+        if batch_raw:
+            try:
+                batch_size = max(1, int(batch_raw))
+            except ValueError:
+                logging.warning(
+                    "Invalid TOKEN_MAINTENANCE_BATCH_SIZE value %r; using default %s",
+                    batch_raw,
+                    DEFAULT_BATCH_SIZE,
+                )
+
+        if refresh_raw:
+            try:
+                refresh_minutes = max(0, int(refresh_raw))
+                refresh_ahead = timedelta(minutes=refresh_minutes)
+            except ValueError:
+                logging.warning(
+                    "Invalid TOKEN_MAINTENANCE_REFRESH_AHEAD_MINUTES value %r; using default %s",
+                    refresh_raw,
+                    DEFAULT_REFRESH_AHEAD,
+                )
+
+        job_queue.run_repeating(
+            run_token_health_check,
+            interval=timedelta(minutes=interval_minutes),
+            name="token-health-check",
+            data={
+                "batch_size": batch_size,
+                "refresh_ahead": refresh_ahead,
+                "cursor": 0,
+            },
+        )
+        logging.info(
+            "🩺 Scheduled token maintenance every %s minute(s) (batch_size=%s, refresh_ahead=%s)",
+            interval_minutes,
+            batch_size,
+            refresh_ahead,
+        )
 
     return application
 

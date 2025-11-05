@@ -98,6 +98,7 @@ def log_activity(
     verification: Optional[str] = None,
     duration_ms: Optional[float] = None,
     metadata: Optional[Dict[str, Any]] = None,
+    maintenance_metrics: Optional[Dict[str, Any]] = None,
 ) -> None:
     logging.getLogger("activity").info(
         "user=%s role=%s command=%s source=%s verification=%s duration_ms=%s metadata=%s",
@@ -118,6 +119,8 @@ def log_activity(
     }
     if metadata:
         payload["metadata"] = metadata
+    if maintenance_metrics:
+        payload["maintenance"] = maintenance_metrics
     _write_log_entry("activity", payload)
 
 
@@ -184,9 +187,12 @@ def log_system_error(message: str, exc: Optional[BaseException] = None) -> None:
     _write_log_entry("system", payload)
 
 
-def log_system_info(message: str) -> None:
+def log_system_info(message: str, *, metadata: Optional[Dict[str, Any]] = None) -> None:
     logging.getLogger("system").info("%s", message)
-    _write_log_entry("system", {"level": "INFO", "message": message})
+    payload: Dict[str, Any] = {"level": "INFO", "message": message}
+    if metadata:
+        payload["metadata"] = metadata
+    _write_log_entry("system", payload)
 
 
 def trigger_admin_alert(message: str) -> None:
