@@ -16,6 +16,14 @@ from typing import Dict, Optional
 from pydrive2.auth import GoogleAuth
 
 from creds import get_google_token_base_dir, get_user_token_path
+from security.encryption import (
+    MissingTokenEncryptionKeyError,
+    TokenDecryptionError,
+    decrypt,
+    encrypt,
+    is_encrypted,
+)
+from security.logging_utils import mask_token_path, mask_user_id, token_log_extra
 
 logger = logging.getLogger("auth")
 
@@ -93,7 +101,11 @@ class TokenStore:
         try:
             directory.mkdir(parents=True, exist_ok=True)
         except Exception as exc:  # pragma: no cover - defensive logging
-            logger.warning("Failed to create token directory %s: %s", directory, exc)
+            logger.warning(
+                "Failed to create token directory",
+                exc_info=True,
+                extra=token_log_extra(token_path=directory, reason="mkdir_failed"),
+            )
         self._chmod(directory, 0o700)
 
     def configure_gauth(self, gauth: GoogleAuth, token_file: str | Path) -> GoogleAuth:
@@ -155,7 +167,15 @@ class TokenStore:
             except Exception as exc:
                 result = self._handle_refresh_failure(user_id, token_path, exc, start)
                 logger.warning(
-                    "🔁 Refresh failed for user %s: %s", user_id, result.error, exc_info=True
+                    "🔁 Refresh failed for %s: %s",
+                    mask_user_id(user_id),
+                    result.error,
+                    exc_info=True,
+                    extra=token_log_extra(
+                        user_id=user_id,
+                        token_path=token_path,
+                        reason="refresh_failed",
+                    ),
                 )
                 return result
 
@@ -164,10 +184,15 @@ class TokenStore:
             except Exception as exc:
                 result = self._handle_refresh_failure(user_id, token_path, exc, start)
                 logger.warning(
-                    "⚠️ Failed to persist refreshed token for user %s: %s",
-                    user_id,
+                    "⚠️ Failed to persist refreshed token for %s: %s",
+                    mask_user_id(user_id),
                     result.error,
                     exc_info=True,
+                    extra=token_log_extra(
+                        user_id=user_id,
+                        token_path=token_path,
+                        reason="persist_failed",
+                    ),
                 )
                 return result
 
@@ -182,7 +207,11 @@ class TokenStore:
         )
         self._refresh_failures[user_id].clear()
         self._update_cache(user_id, result)
-        logger.info("🔁 Refreshed access token for user %s", user_id)
+        logger.info(
+            "🔁 Refreshed access token for %s",
+            mask_user_id(user_id),
+            extra=token_log_extra(user_id=user_id, token_path=token_path, reason="refresh"),
+        )
         return result
 
     def store(self, user_id: int, gauth: GoogleAuth) -> TokenLoadResult:
@@ -201,7 +230,11 @@ class TokenStore:
         )
         self._refresh_failures[user_id].clear()
         self._update_cache(user_id, result)
-        logger.info("💾 Stored credentials for user %s", user_id)
+        logger.info(
+            "💾 Stored credentials for %s",
+            mask_user_id(user_id),
+            extra=token_log_extra(user_id=user_id, token_path=token_path, reason="store"),
+        )
         return result
 
     def quarantine(self, user_id: int, reason: str) -> Optional[Path]:
@@ -255,12 +288,111 @@ class TokenStore:
                 latency_ms=latency_ms,
             )
             self._update_cache(user_id, result, mtime=0.0, size=0)
-            logger.debug("🔐 No credentials found for user %s", user_id)
+            logger.debug(
+                "🔐 No credentials found for %s",
+                mask_user_id(user_id),
+                extra=token_log_extra(user_id=user_id, token_path=token_path, reason="absent"),
+            )
+            return result
+
+        try:
+            raw_bytes = token_path.read_bytes()
+        except Exception as exc:
+            quarantined = self._quarantine_file(user_id, token_path, "read_error")
+            latency_ms = (time.perf_counter() - start) * 1000
+            result = TokenLoadResult(
+                user_id=user_id,
+                path=token_path,
+                state=TokenState.CORRUPTED,
+                gauth=None,
+                error="read_error",
+                quarantined_to=quarantined,
+                latency_ms=latency_ms,
+            )
+            self._update_cache(user_id, result, mtime=0.0, size=0)
+            logger.error(
+                "⚠️ Unable to read credentials for %s",
+                mask_user_id(user_id),
+                exc_info=True,
+                extra=token_log_extra(
+                    user_id=user_id,
+                    token_path=token_path,
+                    reason="read_error",
+                    quarantine_path=quarantined,
+                ),
+            )
+            return result
+
+        encrypted_blob = is_encrypted(raw_bytes)
+        try:
+            plaintext = decrypt(raw_bytes)
+        except MissingTokenEncryptionKeyError as exc:
+            quarantined = self._quarantine_file(user_id, token_path, "missing_key")
+            latency_ms = (time.perf_counter() - start) * 1000
+            logger.error(
+                "🔒 Encrypted credentials require a configured key for %s",
+                mask_user_id(user_id),
+                extra=token_log_extra(
+                    user_id=user_id,
+                    token_path=token_path,
+                    reason="missing_key",
+                    quarantine_path=quarantined,
+                ),
+            )
+            self._update_cache(
+                user_id,
+                TokenLoadResult(
+                    user_id=user_id,
+                    path=token_path,
+                    state=TokenState.CORRUPTED,
+                    gauth=None,
+                    error="missing_key",
+                    quarantined_to=quarantined,
+                    latency_ms=latency_ms,
+                ),
+                mtime=0.0,
+                size=0,
+            )
+            raise
+        except TokenDecryptionError as exc:
+            quarantined = self._quarantine_file(user_id, token_path, "decrypt_failed")
+            latency_ms = (time.perf_counter() - start) * 1000
+            result = TokenLoadResult(
+                user_id=user_id,
+                path=token_path,
+                state=TokenState.CORRUPTED,
+                gauth=None,
+                error="decrypt_failed",
+                quarantined_to=quarantined,
+                latency_ms=latency_ms,
+            )
+            self._update_cache(user_id, result, mtime=0.0, size=0)
+            logger.warning(
+                "⚠️ Failed to decrypt credentials for %s: %s",
+                mask_user_id(user_id),
+                exc,
+                extra=token_log_extra(
+                    user_id=user_id,
+                    token_path=token_path,
+                    reason="decrypt_failed",
+                    quarantine_path=quarantined,
+                ),
+            )
             return result
 
         gauth = self.configure_gauth(GoogleAuth(), token_path)
+        load_path: Path
+        temp_path: Optional[Path] = None
+        if encrypted_blob:
+            with tempfile.NamedTemporaryFile("wb", delete=False) as temp_file:
+                temp_file.write(plaintext)
+                temp_path = Path(temp_file.name)
+            load_path = temp_path
+        else:
+            load_path = token_path
+
         try:
-            gauth.LoadCredentialsFile(str(token_path))
+            gauth.LoadCredentialsFile(str(load_path))
         except Exception as exc:
             quarantined = self._quarantine_file(user_id, token_path, "load_error")
             latency_ms = (time.perf_counter() - start) * 1000
@@ -274,8 +406,22 @@ class TokenStore:
                 latency_ms=latency_ms,
             )
             self._update_cache(user_id, result, mtime=0.0, size=0)
-            logger.warning("⚠️ Invalid credentials for user %s: %s", user_id, exc)
+            logger.warning(
+                "⚠️ Invalid credentials for %s: %s",
+                mask_user_id(user_id),
+                exc,
+                extra=token_log_extra(
+                    user_id=user_id,
+                    token_path=token_path,
+                    reason="load_error",
+                    quarantine_path=quarantined,
+                ),
+            )
             return result
+        finally:
+            if temp_path is not None:
+                with contextlib.suppress(FileNotFoundError):
+                    temp_path.unlink()
 
         credentials = getattr(gauth, "credentials", None)
         if credentials is None or getattr(credentials, "invalid", False):
@@ -291,7 +437,16 @@ class TokenStore:
                 latency_ms=latency_ms,
             )
             self._update_cache(user_id, result, mtime=0.0, size=0)
-            logger.warning("⚠️ Removed invalid credentials for user %s", user_id)
+            logger.warning(
+                "⚠️ Removed invalid credentials for %s",
+                mask_user_id(user_id),
+                extra=token_log_extra(
+                    user_id=user_id,
+                    token_path=token_path,
+                    reason="invalid_credentials",
+                    quarantine_path=quarantined,
+                ),
+            )
             return result
 
         state = TokenState.EXPIRED if gauth.access_token_expired else TokenState.VALID
@@ -310,7 +465,10 @@ class TokenStore:
             size=token_stat.st_size,
         )
         logger.debug(
-            "🔐 Loaded credentials for user %s (state=%s)", user_id, state.value
+            "🔐 Loaded credentials for %s (state=%s)",
+            mask_user_id(user_id),
+            state.value,
+            extra=token_log_extra(user_id=user_id, token_path=token_path, reason=state.value),
         )
         return result
 
@@ -324,6 +482,10 @@ class TokenStore:
                 temp_path = Path(temp_file.name)
             try:
                 gauth.SaveCredentialsFile(str(temp_path))
+                plaintext = temp_path.read_bytes()
+                encrypted = encrypt(plaintext)
+                with temp_path.open("wb") as encrypted_file:
+                    encrypted_file.write(encrypted)
                 os.replace(temp_path, token_path)
                 self._chmod(token_path, 0o600)
             except Exception:
@@ -343,10 +505,15 @@ class TokenStore:
             if token_path.exists():
                 token_path.replace(destination)
                 logger.warning(
-                    "🚫 Quarantined token for user %s due to %s: %s",
-                    user_id,
+                    "🚫 Quarantined token for %s due to %s",
+                    mask_user_id(user_id),
                     reason,
-                    destination,
+                    extra=token_log_extra(
+                        user_id=user_id,
+                        token_path=token_path,
+                        reason=reason,
+                        quarantine_path=destination,
+                    ),
                 )
                 self._update_cache(user_id, TokenLoadResult(
                     user_id=user_id,
@@ -359,7 +526,14 @@ class TokenStore:
                 return destination
         except Exception as exc:  # pragma: no cover - defensive logging
             logger.error(
-                "⚠️ Failed to quarantine token for user %s: %s", user_id, exc, exc_info=True
+                "⚠️ Failed to quarantine token for %s",
+                mask_user_id(user_id),
+                exc_info=True,
+                extra=token_log_extra(
+                    user_id=user_id,
+                    token_path=token_path,
+                    reason=f"quarantine_{reason}",
+                ),
             )
         with contextlib.suppress(FileNotFoundError):
             token_path.unlink()
@@ -417,7 +591,11 @@ class TokenStore:
         try:
             os.chmod(path, mode)
         except PermissionError:  # pragma: no cover - best effort
-            logger.debug("Skipping chmod for %s", path)
+            logger.debug(
+                "Skipping chmod for %s",
+                mask_token_path(path),
+                extra=token_log_extra(token_path=path, reason="chmod_skip"),
+            )
         except FileNotFoundError:  # pragma: no cover - best effort
             return
 
@@ -425,7 +603,11 @@ class TokenStore:
         try:
             self._base_dir.mkdir(parents=True, exist_ok=True)
         except Exception as exc:  # pragma: no cover - defensive logging
-            logger.warning("Unable to create token base directory %s: %s", self._base_dir, exc)
+            logger.warning(
+                "Unable to create token base directory",
+                exc_info=True,
+                extra=token_log_extra(token_path=self._base_dir, reason="base_dir"),
+            )
         self._chmod(self._base_dir, 0o700)
 
     @contextlib.contextmanager

@@ -16,6 +16,7 @@ from google_utils import (
     ensure_token_storage,
     refresh_user_gauth,
 )
+from security.logging_utils import mask_token_path, mask_user_id, token_log_extra
 from security.token_store import token_store
 from exceptions import UploadError
 
@@ -92,7 +93,10 @@ def _quarantine_token(user_id: Optional[int], reason: str, fallback_path: str) -
             token_store().quarantine(user_id, reason)
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning(
-                "⚠️ 隔离用户 %s 的凭证失败：%s", user_id, exc, exc_info=True
+                "⚠️ 隔离凭证失败：%s",
+                mask_user_id(user_id),
+                exc_info=True,
+                extra=token_log_extra(user_id=user_id, reason=f"quarantine_{reason}"),
             )
         return
 
@@ -101,10 +105,19 @@ def _quarantine_token(user_id: Optional[int], reason: str, fallback_path: str) -
         return
     try:
         token_path.unlink()
-        logger.info("🧹 已删除损坏的凭证文件：%s", token_path)
+        logger.info(
+            "🧹 已删除损坏的凭证文件：%s",
+            mask_token_path(token_path),
+            extra=token_log_extra(token_path=token_path, reason=reason),
+        )
     except Exception as cleanup_error:  # pragma: no cover - defensive logging
         logger.warning(
-            "⚠️ 删除损坏的凭证文件失败：%s", cleanup_error, exc_info=True
+            "⚠️ 删除损坏的凭证文件失败",
+            exc_info=True,
+            extra=token_log_extra(
+                token_path=token_path,
+                reason=f"cleanup_{reason}",
+            ),
         )
 
 
@@ -120,8 +133,9 @@ def upload(
 ) -> str:
     logger.info(
         "☁️ 即将为用户 %s 上传文件：%s",
-        user_id if user_id is not None else "未知",
+        mask_user_id(user_id),
         filename,
+        extra=token_log_extra(user_id=user_id, reason="upload_start"),
     )
 
     resolved_path = Path(token_file_path).expanduser()
@@ -136,10 +150,14 @@ def upload(
             gauth.LoadCredentialsFile(str(resolved_path))
         except Exception as load_error:
             logger.error(
-                "❌ 无法加载用户 %s 的授权凭证：%s",
-                user_id,
+                "❌ 无法加载授权凭证：%s",
                 load_error,
                 exc_info=True,
+                extra=token_log_extra(
+                    user_id=user_id,
+                    token_path=resolved_path,
+                    reason="load_error",
+                ),
             )
             _quarantine_token(user_id, "load_error", str(resolved_path))
             raise UploadError(
@@ -152,7 +170,15 @@ def upload(
         )
 
     if getattr(gauth.credentials, "invalid", False):
-        logger.warning("⚠️ 用户 %s 的凭证标记为无效。", user_id)
+        logger.warning(
+            "⚠️ 凭证标记为无效：%s",
+            mask_user_id(user_id),
+            extra=token_log_extra(
+                user_id=user_id,
+                token_path=resolved_path,
+                reason="invalid_credentials",
+            ),
+        )
         _quarantine_token(user_id, "invalid_credentials", str(resolved_path))
         raise UploadError(
             f"用户 {user_id or '未知'} 的授权已失效，请发送 /auth 重新授权。"
@@ -165,24 +191,40 @@ def upload(
         gauth = refresh_result.gauth
         if refresh_result.state is not TokenState.VALID or gauth is None:
             logger.error(
-                "❌ 刷新用户 %s 的授权凭证失败：%s",
-                user_id,
+                "❌ 刷新授权凭证失败：%s",
                 refresh_result.error,
+                extra=token_log_extra(
+                    user_id=user_id,
+                    token_path=resolved_path,
+                    reason="refresh_failed",
+                ),
             )
             _quarantine_token(user_id, "refresh_failed", str(resolved_path))
             raise UploadError(
                 f"用户 {user_id or '未知'} 的授权凭证无法刷新，请重新发送 /auth。"
             )
-        logger.info("🔄 已刷新用户 %s 的访问令牌。", user_id)
+        logger.info(
+            "🔄 已刷新访问令牌：%s",
+            mask_user_id(user_id),
+            extra=token_log_extra(
+                user_id=user_id,
+                token_path=resolved_path,
+                reason="refresh_success",
+            ),
+        )
 
     try:
         gauth.Authorize()
     except Exception as authorize_error:
         logger.error(
-            "❌ 授权用户 %s 的凭证失败：%s",
-            user_id,
+            "❌ 授权凭证失败：%s",
             authorize_error,
             exc_info=True,
+            extra=token_log_extra(
+                user_id=user_id,
+                token_path=resolved_path,
+                reason="authorize_failed",
+            ),
         )
         _quarantine_token(user_id, "authorize_failed", str(resolved_path))
         raise UploadError(
