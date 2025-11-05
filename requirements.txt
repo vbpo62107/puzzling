@@ -1,6 +1,7 @@
 python-telegram-bot==20.3
 pydrive2==1.19.0
 pycryptodome==3.20.0
+cryptography==42.0.7
 requests==2.31.0
 google-auth==2.35.0
 google-auth-oauthlib==1.2.1
